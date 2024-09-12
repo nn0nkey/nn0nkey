@@ -1,4 +1,4 @@
-Thinkphp8反序列化
+
 
 ## Vulnerability description
 
