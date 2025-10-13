@@ -1,35 +1,32 @@
-# Hi there, I'm Jialin Liao (廖家林) 👋
+# Hi there, 我是廖家林 👋
 
-[cite_start]I'm a passionate and self-driven Information Security student from Chengdu University of Information Technology[cite: 7]. My expertise lies in Offensive Security, Code Auditing, and Security Tool Development. I thrive on solving complex security challenges and enjoy contributing to the community through open-source projects and technical articles.
-
----
-
-### 🚀 What I Do
-
--   [cite_start]**Penetration Testing & Red Teaming**: Experienced in full-lifecycle penetration testing, from web application security (OWASP Top 10, Business Logic Flaws) [cite: 15] [cite_start]to internal network penetration (Active Directory, Lateral Movement)[cite: 19]. [cite_start]Proven success in multiple red team exercises, achieving **1st place in the "Huxiang Cup" 2025**.
-
--   [cite_start]**Code Auditing & Vulnerability Research**: Proficient in white-box auditing for Java/PHP applications using tools like CodeQL[cite: 17]. [cite_start]I have independently discovered and been credited with multiple CVEs (e.g., CVE-2024-48112, CVE-2024-44921).
-
--   **Security Development**: I build tools to empower security operations. My projects include:
-    -   [cite_start][**AI-API-Fuzzer**](https://github.com/nn0nkey/AI-API-Fuzzer): An intelligent fuzzer that leverages LLMs to discover hidden APIs.
-    -   [cite_start][**Godzilla_nnonkey**](https://github.com/nn0nkey/Godzilla_nnonkey): An enhanced version of the Godzilla webshell with advanced evasion capabilities[cite: 66, 67].
-    -   [cite_start][**Fofa-MCP**](https://github.com/nn0nkey/Fofa-MCP): An asset discovery tool based on the MCP framework[cite: 61, 62].
-
--   [cite_start]**Emerging Tech Security**: Actively exploring security in new domains, including **Cloud-Native Security** (Docker, Kubernetes)  [cite_start]and **AI Security** (Prompt Injection, LLM-based attacks)[cite: 22].
+[cite_start]我是一名来自成都信息工程大学，对技术充满热情的在读信息安全专业学生。我的核心专长在于**攻击性安全技术**、**代码审计**与**安全工具开发**。我热衷于解决复杂的安全挑战，并享受通过开源项目和技术文章为安全社区做出贡献。
 
 ---
 
-### 🛠️ My Tech Stack
+### 🚀 我的亮点
 
--   **Offensive Security**: Burp Suite, SQLMap, Metasploit, Cobalt Strike
--   **Code Auditing**: Java, PHP, CodeQL
--   **Development**: Python, Java, LangChain
--   **Cloud & DevOps**: Docker, Kubernetes
+-   [cite_start]**渗透测试 & 红队攻击**: 我具备全链路渗透测试的实战经验，覆盖从Web应用安全（OWASP Top 10、业务逻辑漏洞）到内网渗透（AD域、横向移动）的各个环节 [cite: 15, 19][cite_start]。作为红队核心成员，我参与了多次攻防演练，并随队获得 **2025“湖湘杯”网络安全攻防演练第一名** [cite: 32, 53]。
+
+-   [cite_start]**代码审计 & 漏洞研究**: 我熟练掌握Java和PHP的白盒审计能力，并能运用CodeQL进行漏洞挖掘 [cite: 17, 43][cite_start]。我独立挖掘并获得了多个CVE漏洞编号，例如 **Thinkphp RCE (CVE-2024-48112)** 和 **Seacms 前台SQL注入 (CVE-2024-44921)** [cite: 59]。
+
+-   **安全开发 & 工具创造**: 我热衷于编写工具来赋能安全工作。我的个人项目包括：
+    -   [cite_start][**AI-API-Fuzzer**](https://github.com/nn0nkey/AI-API-Fuzzer): 一款利用大语言模型（LLM）推理能力来智能发现隐藏API接口的模糊测试工具 [cite: 63, 64, 65]。
+    -   [cite_start][**Godzilla_nnonkey**](https://github.com/nn0nkey/Godzilla_nnonkey): 通过重构流量特征和集成免杀技术，提升了原版哥斯拉隐匿与对抗能力的增强版本 [cite: 66, 67]。
+    -   [cite_start][**Fofa-MCP**](https://github.com/nn0nkey/Fofa-MCP): 基于MCP协议实现的FOFA和Shodan搜索引擎服务器，用于快速发现互联网暴露资产 [cite: 61, 62]。
+
+-   [cite_start]**前沿技术探索**: 我积极探索新兴领域的安全问题，包括**云原生安全**（Docker逃逸、Kubernetes横向移动）和**AI大模型安全**（提示词注入、LLM相关风险） [cite: 20, 22, 23]。
 
 ---
 
-### 📫 Let's Connect!
+### 🛠️ 技术栈
 
--   [cite_start]**Email**: `2403635670@qq.com` [cite: 4]
--   [cite_start]**Technical Blog (Aliyun Xz)**: [https://xz.aliyun.com/users/141946](https://xz.aliyun.com/users/141946) [cite: 5]
--   [cite_start]**Honors**: Awarded "Excellent Author" at Aliyun White Hat Conference 2024.
+-   [cite_start]**攻击性安全**: Burp Suite, SQLMap, Java反序列化, 内网渗透 [cite: 15, 16, 18, 19]
+-   [cite_start]**代码审计**: Java, PHP, CodeQL [cite: 17]
+-   [cite_start]**开发**: Python, Java, LangChain [cite: 21, 23]
+-   [cite_start]**云原生**: Docker, Kubernetes [cite: 20]
+
+---
+
+### 📫 联系我
+-   [cite_start]**邮箱**: `2403635670@qq.com` 
