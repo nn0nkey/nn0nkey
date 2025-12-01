@@ -1,32 +1,36 @@
-# Hi there, 我是nn0nkey D0g3成员👋
+# Hi there, I'm nn0nkey 👋
 
-[cite_start]我是一名来自成都信息工程大学，对技术充满热情的在读信息安全专业学生。我的核心专长在于**攻击性安全技术**、**代码审计**与**安全工具开发**。我热衷于解决复杂的安全挑战，并享受通过开源项目和技术文章为安全社区做出贡献。
+> **Security Researcher | Red Team Player | JD Group Security Intern** > 🎓 Student at **Chengdu University of Information Technology (CUIT)** > 🏴 Member of **nn0nkey D0g3**
 
----
-
-### 🚀 我的亮点
-
--   [cite_start]**渗透测试 & 红队攻击**: 我具备全链路渗透测试的实战经验，覆盖从Web应用安全（OWASP Top 10、业务逻辑漏洞）到内网渗透（AD域、横向移动）的各个环节 [cite: 15, 19][cite_start]。作为红队核心成员，我参与了多次攻防演练，并随队获得 **2025“湖湘杯”网络安全攻防演练第一名** [cite: 32, 53]。
-
--   [cite_start]**代码审计 & 漏洞研究**: 我熟练掌握Java和PHP的白盒审计能力，并能运用CodeQL进行漏洞挖掘 [cite: 17, 43][cite_start]。我独立挖掘并获得了多个CVE漏洞编号，例如 **Thinkphp RCE (CVE-2024-48112)** 和 **Seacms 前台SQL注入 (CVE-2024-44921)** [cite: 59]。
-
--   **安全开发 & 工具创造**: 我热衷于编写工具来赋能安全工作。我的个人项目包括：
-    -   [cite_start][**AI-API-Fuzzer**](https://github.com/nn0nkey/AI-API-Fuzzer): 一款利用大语言模型（LLM）推理能力来智能发现隐藏API接口的模糊测试工具 [cite: 63, 64, 65]。
-    -   [cite_start][**Godzilla_nnonkey**](https://github.com/nn0nkey/Godzilla_nnonkey): 通过重构流量特征和集成免杀技术，提升了原版哥斯拉隐匿与对抗能力的增强版本 [cite: 66, 67]。
-    -   [cite_start][**Fofa-MCP**](https://github.com/nn0nkey/Fofa-MCP): 基于MCP协议实现的FOFA和Shodan搜索引擎服务器，用于快速发现互联网暴露资产 [cite: 61, 62]。
-
--   [cite_start]**前沿技术探索**: 我积极探索新兴领域的安全问题，包括**云原生安全**（Docker逃逸、Kubernetes横向移动）和**AI大模型安全**（提示词注入、LLM相关风险） [cite: 20, 22, 23]。
+专注于 **Java 安全**、**代码审计** 与 **LLM 安全**。
 
 ---
 
-### 🛠️ 技术栈
+### 🏆 Achievements & Highlights
 
--   [cite_start]**攻击性安全**: Burp Suite, SQLMap, Java反序列化, 内网渗透 [cite: 15, 16, 18, 19]
--   [cite_start]**代码审计**: Java, PHP, CodeQL [cite: 17]
--   [cite_start]**开发**: Python, Java, LangChain [cite: 21, 23]
--   [cite_start]**云原生**: Docker, Kubernetes [cite: 20]
+- **CVE挖掘**: 独立挖掘多个漏洞，包括 `ThinkPHP RCE` (**CVE-2024-48112**) 和 `Seacms SQL Injection` (**CVE-2024-44921**)。
+- **实战经验**: 具备全链路渗透经验（Web/AD域/横向移动），目前在 **京东(JD.com)** 信息安全部实习。
 
 ---
 
-### 📫 联系我
--   [cite_start]**邮箱**: `2403635670@qq.com` 
+### 🛠️ Open Source Projects
+
+| Project | Description | Tech Stack |
+| :--- | :--- | :--- |
+| 🤖 **[AI-API-Fuzzer](https://github.com/nn0nkey/AI-API-Fuzzer)** | 利用 LLM 推理能力智能发现隐藏 API 的模糊测试工具。 | `LLM` `Python` `Fuzzing` |
+| 🦖 **[Godzilla_nnonkey](https://github.com/nn0nkey/Godzilla_nnonkey)** | 哥斯拉魔改版。重构流量特征，集成免杀技术，增强隐匿与对抗能力。 | `Java` `Webshell` `Bypass` |
+| 🌐 **[Fofa-MCP](https://github.com/nn0nkey/Fofa-MCP)** | 基于 MCP 协议的 FOFA/Shodan 服务端，用于快速资产发现。 | `MCP` `Cloud Security` |
+
+---
+
+### 💻 Tech Stack
+
+* **Offensive Security:** `Burp Suite` `SQLMap` `Cobalt Strike` `CodeQL`
+* **Dev & Scripting:** `Java` `Python` `PHP` `LangChain`
+* **Environment:** `Docker` `Kubernetes` `Linux`
+
+---
+
+### 📫 Connect with Me
+
+* 📧 **Email**: 2403635670@qq.com
